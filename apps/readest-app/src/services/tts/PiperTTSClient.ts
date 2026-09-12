@@ -5,7 +5,7 @@ import { CachingProvider } from './providers/cache';
 import { PiperSpeechProvider } from './providers/piper';
 import { PiperVoiceManager } from './providers/piperVoiceManager';
 import { SpeechProvider } from './providers/types';
-import { TTSController } from './TTSController';
+import type { TTSController } from './TTSController';
 
 // Everything engine-independent (scheduler, playout, word tracking, preload,
 // gap control) lives in BufferedTTSClient, exactly like EdgeTTSClient; the
