@@ -9,4 +9,6 @@ permissions = [
   "allow-unload-voice",
   "allow-synthesize",
   "allow-stop",
+  "allow-register-listener",
+  "allow-remove-listener",
 ]

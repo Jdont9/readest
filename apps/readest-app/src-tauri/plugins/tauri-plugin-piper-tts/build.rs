@@ -7,6 +7,8 @@ const COMMANDS: &[&str] = &[
     "unload_voice",
     "synthesize",
     "stop",
+    "register_listener",
+    "remove_listener",
 ];
 
 fn main() {
