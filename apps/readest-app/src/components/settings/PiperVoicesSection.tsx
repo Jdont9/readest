@@ -27,6 +27,7 @@ const PiperVoicesSection: React.FC = () => {
 
   const [ready, setReady] = useState(false);
   const [available, setAvailable] = useState(false);
+  const [initError, setInitError] = useState<string | null>(null);
   const [rowStates, setRowStates] = useState<Record<string, VoiceRowState>>({});
   const [progress, setProgress] = useState<Record<string, PiperDownloadProgress>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -36,15 +37,24 @@ const PiperVoicesSection: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const ok = await manager.init();
-      if (cancelled) return;
-      setAvailable(ok);
-      const states: Record<string, VoiceRowState> = {};
-      catalog.forEach((v) => {
-        states[v.id] = manager.isDownloaded(v.id) ? 'downloaded' : 'idle';
-      });
-      setRowStates(states);
-      setReady(true);
+      try {
+        const ok = await manager.init();
+        if (cancelled) return;
+        setAvailable(ok);
+        const states: Record<string, VoiceRowState> = {};
+        catalog.forEach((v) => {
+          states[v.id] = manager.isDownloaded(v.id) ? 'downloaded' : 'idle';
+        });
+        setRowStates(states);
+      } catch (err) {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.error('[PiperVoicesSection] init failed', err);
+        setAvailable(false);
+        setInitError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setReady(true);
+      }
     })();
     const unsubscribe = manager.onProgress((p) => {
       setProgress((prev) => ({ ...prev, [p.id]: p }));
@@ -64,9 +74,23 @@ const PiperVoicesSection: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Not on Android (or the plugin isn't wired up in this build): render
-  // nothing rather than an empty/broken section.
-  if (ready && !available) return null;
+  // Only hide silently before we know anything yet. Once we know (ready),
+  // always show something: the catalog, or — if init failed — the actual
+  // error, so a real Android-side bug is visible instead of a blank
+  // section that looks like Piper was never wired up at all.
+  if (!ready) return null;
+
+  if (!available) {
+    return (
+      <BoxedList
+        title={_('Offline Voices (Piper)')}
+        description={initError ?? _('Piper TTS is not available on this build.')}
+        data-setting-id='settings.tts.piperVoices'
+      >
+        <></>
+      </BoxedList>
+    );
+  }
 
   const handleDownload = async (voice: PiperVoiceDescriptor) => {
     setErrors((prev) => ({ ...prev, [voice.id]: '' }));
