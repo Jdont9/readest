@@ -29,50 +29,50 @@ pub struct VoiceStatus {
     pub bytes_on_disk: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListVoicesArgs {
     pub catalog: Vec<VoiceDescriptor>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListVoicesResponse {
     pub voices: Vec<VoiceStatus>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadVoiceArgs {
     pub voice: VoiceDescriptor,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadVoiceResponse {
     pub id: String,
     pub success: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelDownloadArgs {
     pub id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteVoiceArgs {
     pub id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadVoiceArgs {
     pub id: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadVoiceResponse {
     pub id: String,
     pub sample_rate: u32,
     pub num_speakers: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SynthesizeArgs {
     pub id: String,
     pub text: String,
@@ -89,7 +89,7 @@ fn default_speed() -> f32 {
     1.0
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SynthesizeResponse {
     // Base64-encoded 16-bit PCM WAV, mono, at the model's native sample rate.
     pub audio_base64: String,
