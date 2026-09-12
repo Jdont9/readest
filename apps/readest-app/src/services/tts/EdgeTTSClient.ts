@@ -6,7 +6,7 @@ import { BookTTSCacheStore, getTTSCacheConfig } from './providers/bookCacheStore
 import { CachingProvider } from './providers/cache';
 import { EdgeSpeechProvider } from './providers/edge';
 import { SpeechProvider } from './providers/types';
-import { TTSController } from './TTSController';
+import type { TTSController } from './TTSController';
 
 // Everything engine-independent (scheduler, playout, word tracking, preload)
 // lives in BufferedTTSClient; the Edge specifics live in EdgeSpeechProvider.

@@ -4,7 +4,7 @@ import { TTSCapabilities, TTSClient, TTSMessageEvent } from './TTSClient';
 import { parseSSMLMarks } from '@/utils/ssml';
 import { TTSGranularity, TTSMark, TTSVoice, TTSVoicesGroup } from './types';
 import { WEB_SPEECH_BLACKLISTED_VOICES } from './TTSData';
-import { TTSController } from './TTSController';
+import type { TTSController } from './TTSController';
 import { TTSUtils } from './TTSUtils';
 
 interface TTSBoundaryEvent {

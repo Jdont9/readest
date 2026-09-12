@@ -7,7 +7,7 @@ import { stubTranslation as _ } from '@/utils/misc';
 import { TTSCapabilities, TTSClient, TTSMessageEvent } from './TTSClient';
 import { TTSGranularity, TTSMark, TTSVoice, TTSVoicesGroup } from './types';
 import { TTSUtils } from './TTSUtils';
-import { TTSController } from './TTSController';
+import type { TTSController } from './TTSController';
 
 type TTSEventPayload = {
   utteranceId: string;

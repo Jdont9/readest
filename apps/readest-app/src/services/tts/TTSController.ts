@@ -23,6 +23,7 @@ import { SectionTimeline, TimelineSentence } from './SectionTimeline';
 import { hydrateProvisionalDurations } from './ttsDuration';
 import { DownloadableSentence, SectionEnumerator, TTSDownloader } from './TTSDownloader';
 import { TTSUtils } from './TTSUtils';
+import { DEFAULT_PARAGRAPH_GAP_SEC } from './ttsConstants';
 import { TTSClient } from './TTSClient';
 import { startAudioKeepAlive, stopAudioKeepAlive } from './WebAudioPlayer';
 import { isValidLang } from '@/utils/lang';
@@ -102,12 +103,7 @@ export interface TTSViewBindings {
 }
 
 // Silence inserted between paragraphs when auto-advancing during continuous
-// playback. Unlike the Edge-only inter-sentence gap, this applies to every
-// TTS client: the paragraph-to-paragraph transition (stop -> next -> speak)
-// is engine-agnostic, handled entirely in #speak()/forward() below. There is
-// no natural pause here otherwise -- the transition is as fast as the async
-// stop/init overhead allows, which reads as no pause at all.
-export const DEFAULT_PARAGRAPH_GAP_SEC = 0.3;
+export { DEFAULT_PARAGRAPH_GAP_SEC };
 
 export class TTSController extends EventTarget {
   // PlaybackSource tag: the media bridge and the session manager consume this
