@@ -1,0 +1,106 @@
+name: Android Debug Build
+
+# Manual only: builds an unsigned debug APK for a real device (arm64) and
+# uploads it as a workflow artifact. No signing secrets required, unlike
+# release.yml/nightly.yml — this is for testing on your own phone via
+# `adb install`, not for distribution.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Rust/Tauri Android target'
+        required: false
+        default: 'aarch64'
+        type: choice
+        options:
+          - aarch64 # arm64-v8a — virtually all phones from the last ~8 years
+          - armv7 # armeabi-v7a — older/budget devices
+
+permissions:
+  contents: read
+
+jobs:
+  build-debug-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: install NDK
+        run: sdkmanager "ndk;28.2.13676358"
+
+      - name: install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: copy pdfjs-dist and simplecc-dist to public directory
+        run: pnpm --filter @readest/readest-app setup-vendors
+
+      - name: map target to Rust triple
+        id: rust_target
+        run: |
+          case "${{ inputs.target || 'aarch64' }}" in
+            aarch64) echo "triple=aarch64-linux-android" >> "$GITHUB_OUTPUT" ;;
+            armv7)   echo "triple=armv7-linux-androideabi" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ steps.rust_target.outputs.triple }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-debug-${{ inputs.target || 'aarch64' }}-cargo
+
+      - name: create .env.local
+        run: |
+          echo "NEXT_PUBLIC_APP_PLATFORM=tauri" >> .env.local
+          cp .env.local apps/readest-app/.env.local
+
+      - name: build debug APK
+        shell: bash
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
+        run: |
+          set -euo pipefail
+          cd apps/readest-app
+          rm -rf src-tauri/gen/android
+          pnpm tauri android init
+          pnpm tauri icon ../../data/icons/readest-book.png
+          git checkout .
+          pnpm tauri android build --debug --target ${{ inputs.target || 'aarch64' }}
+
+      - name: locate APK
+        id: apk
+        run: |
+          path=$(find apps/readest-app/src-tauri/gen/android/app/build/outputs/apk -name '*-debug.apk' | head -n1)
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+          echo "Found: $path"
+
+      - name: upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: readest-debug-${{ inputs.target || 'aarch64' }}
+          path: ${{ steps.apk.outputs.path }}
+          retention-days: 14
