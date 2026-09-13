@@ -1835,6 +1835,14 @@ export class TTSController extends EventTarget {
     const useNativeTTS = !!this.ttsNativeVoices.find(
       (voice) => (voiceId === '' || voice.id === voiceId) && !voice.disabled,
     );
+    // A voice just downloaded from the Settings panel won't be in
+    // ttsPiperVoices yet — that list was only populated once, at init() —
+    // so refresh it here before checking membership (cheap: native
+    // list_voices just checks a few files' existence on-device).
+    if (this.ttsPiperClient) {
+      await this.ttsPiperClient.refreshVoices();
+      this.ttsPiperVoices = await this.ttsPiperClient.getAllVoices();
+    }
     const usePiperTTS = !!this.ttsPiperVoices.find(
       (voice) => (voiceId === '' || voice.id === voiceId) && !voice.disabled,
     );
