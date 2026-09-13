@@ -41,6 +41,7 @@ const PiperVoicesSection: React.FC = () => {
         const ok = await manager.init();
         if (cancelled) return;
         setAvailable(ok);
+        if (!ok) setInitError(manager.lastError);
         const states: Record<string, VoiceRowState> = {};
         catalog.forEach((v) => {
           states[v.id] = manager.isDownloaded(v.id) ? 'downloaded' : 'idle';

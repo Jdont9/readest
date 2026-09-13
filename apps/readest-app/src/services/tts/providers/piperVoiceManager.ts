@@ -38,6 +38,10 @@ export class PiperVoiceManager {
     return this.#provider.isAvailable;
   }
 
+  get lastError(): string | null {
+    return this.#provider.lastError;
+  }
+
   isDownloaded(id: string): boolean {
     return this.#provider.isDownloaded(id);
   }

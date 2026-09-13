@@ -29,6 +29,7 @@ export class PiperSpeechProvider implements SpeechProvider {
 
   #available = false;
   #voiceStatus = new Map<string, boolean>(); // id -> downloaded
+  #lastError: string | null = null;
 
   async init(): Promise<boolean> {
     // Piper is currently only wired up on Android (see plugin README); on
@@ -37,6 +38,7 @@ export class PiperSpeechProvider implements SpeechProvider {
     // does for desktop.
     if (!isTauriAppPlatform()) {
       this.#available = false;
+      this.#lastError = 'Not running inside the Tauri runtime (isTauriAppPlatform() is false).';
       return false;
     }
     try {
@@ -46,11 +48,15 @@ export class PiperSpeechProvider implements SpeechProvider {
       );
       res.voices.forEach((v) => this.#voiceStatus.set(v.id, v.downloaded));
       this.#available = true;
+      this.#lastError = null;
       return true;
-    } catch {
+    } catch (err) {
       // Plugin not registered on this platform/build (e.g. desktop, or an
-      // Android build made without vendoring sherpa-onnx) — degrade quietly.
+      // Android build made without vendoring sherpa-onnx) — kept as a
+      // string on #lastError for the settings UI to surface, rather than
+      // failing silently.
       this.#available = false;
+      this.#lastError = err instanceof Error ? err.message : String(err);
       return false;
     }
   }
@@ -104,6 +110,10 @@ export class PiperSpeechProvider implements SpeechProvider {
 
   get isAvailable(): boolean {
     return this.#available;
+  }
+
+  get lastError(): string | null {
+    return this.#lastError;
   }
 
   // Called by piperVoiceManager after a successful download/delete so the
