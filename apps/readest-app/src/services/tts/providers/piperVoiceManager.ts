@@ -74,24 +74,26 @@ export class PiperVoiceManager {
     if (!voice) throw new Error(`Unknown Piper voice: ${id}`);
     await this.#ensureListener();
     await invoke('plugin:piper-tts|download_voice', {
-      voice: {
-        id: voice.id,
-        name: voice.name,
-        lang: voice.lang,
-        quality: voice.quality,
-        archiveUrl: voice.archiveUrl,
-        sizeBytes: voice.sizeBytes,
+      payload: {
+        voice: {
+          id: voice.id,
+          name: voice.name,
+          lang: voice.lang,
+          quality: voice.quality,
+          archiveUrl: voice.archiveUrl,
+          sizeBytes: voice.sizeBytes,
+        },
       },
     });
     this.#provider.markVoiceStatus(id, true);
   }
 
   async cancelDownload(id: string): Promise<void> {
-    await invoke('plugin:piper-tts|cancel_download', { id });
+    await invoke('plugin:piper-tts|cancel_download', { payload: { id } });
   }
 
   async deleteVoice(id: string): Promise<void> {
-    await invoke('plugin:piper-tts|delete_voice', { id });
+    await invoke('plugin:piper-tts|delete_voice', { payload: { id } });
     this.#provider.markVoiceStatus(id, false);
   }
 }

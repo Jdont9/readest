@@ -44,7 +44,7 @@ export class PiperSpeechProvider implements SpeechProvider {
     try {
       const res = await invoke<{ voices: { id: string; downloaded: boolean }[] }>(
         'plugin:piper-tts|list_voices',
-        { catalog: PIPER_VOICE_CATALOG.map(toWireDescriptor) },
+        { payload: { catalog: PIPER_VOICE_CATALOG.map(toWireDescriptor) } },
       );
       res.voices.forEach((v) => this.#voiceStatus.set(v.id, v.downloaded));
       this.#available = true;
@@ -87,7 +87,7 @@ export class PiperSpeechProvider implements SpeechProvider {
     try {
       const res = await invoke<{ audioBase64: string; sampleRate: number; numSamples: number }>(
         'plugin:piper-tts|synthesize',
-        { id: req.voice, text: req.text, speakerId: 0, speed: 1.0 },
+        { payload: { id: req.voice, text: req.text, speakerId: 0, speed: 1.0 } },
       );
       return { audio: base64ToArrayBuffer(res.audioBase64), boundaries: [] };
     } catch (err) {

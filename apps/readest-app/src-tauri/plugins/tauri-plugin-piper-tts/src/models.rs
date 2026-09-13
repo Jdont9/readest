@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 // android/README-SHERPA-ONNX.md. `id` is the stable key used for the
 // on-disk directory and as the TTSVoice id on the JS side.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VoiceDescriptor {
     pub id: String,
     pub name: String,
@@ -22,6 +23,7 @@ pub struct VoiceDescriptor {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VoiceStatus {
     pub id: String,
     pub downloaded: bool,
@@ -30,42 +32,50 @@ pub struct VoiceStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListVoicesArgs {
     pub catalog: Vec<VoiceDescriptor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListVoicesResponse {
     pub voices: Vec<VoiceStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DownloadVoiceArgs {
     pub voice: VoiceDescriptor,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DownloadVoiceResponse {
     pub id: String,
     pub success: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CancelDownloadArgs {
     pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteVoiceArgs {
     pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoadVoiceArgs {
     pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoadVoiceResponse {
     pub id: String,
     pub sample_rate: u32,
@@ -73,6 +83,7 @@ pub struct LoadVoiceResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SynthesizeArgs {
     pub id: String,
     pub text: String,
@@ -90,6 +101,7 @@ fn default_speed() -> f32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SynthesizeResponse {
     // Base64-encoded 16-bit PCM WAV, mono, at the model's native sample rate.
     pub audio_base64: String,
@@ -101,6 +113,7 @@ pub struct SynthesizeResponse {
 // through the plugin's "piper-tts" / "download_progress" channel (mirrors
 // how native-tts streams "tts_events").
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DownloadProgressEvent {
     pub id: String,
     pub bytes_downloaded: u64,
