@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useBookDataStore } from '@/store/bookDataStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TTSController } from '@/services/tts/TTSController';
+import { PiperTTSClient } from '@/services/tts/PiperTTSClient';
 import {
   chapterDownloadStatus,
   deriveDownloadChapters,
@@ -15,6 +16,7 @@ import { getBookHashFromKey } from '@/services/tts/TTSSessionManager';
 
 export interface UseTTSDownloadsResult {
   supported: boolean;
+  isLocalEngine: boolean;
   chapters: DownloadChapter[];
   statuses: Map<number, SectionCacheStatus>;
   cacheBytes: number;
@@ -53,6 +55,10 @@ export const useTTSDownloads = (
 
   const controller = getController();
   const supported = !!controller?.canDownload();
+  // Whether the active engine synthesizes entirely on-device (Piper) rather
+  // than calling out to a paid cloud voice (Edge) — used to decide whether
+  // the premium paywall on pre-downloading even applies, see TTSPlayerSheet.
+  const isLocalEngine = controller?.ttsClient instanceof PiperTTSClient;
 
   const allItems = useTTSDownloadStore((state) => state.items);
   const items = useMemo(
@@ -180,6 +186,7 @@ export const useTTSDownloads = (
 
   return {
     supported,
+    isLocalEngine,
     chapters,
     statuses,
     cacheBytes,

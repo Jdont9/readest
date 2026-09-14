@@ -154,13 +154,20 @@ const TTSPlayerSheet = ({
   // feature: any paid plan can use it; free / signed-out users see the row with
   // a Premium badge that routes to the upgrade page instead of the per-chapter
   // download controls. Mirrors the cloud-sync paywall in IntegrationsPanel.
+  // Exception: Piper runs entirely on-device — the paywall exists to offset
+  // Edge's paid cloud voice usage, which doesn't apply here, so a local
+  // engine always gets the download controls regardless of plan.
   const { userProfilePlan, customizationPurchased } = useQuotaStats();
-  const isDownloadPremium = isTTSCacheAllowed(userProfilePlan ?? 'free', customizationPurchased);
+  const isDownloadPremium =
+    downloads.isLocalEngine || isTTSCacheAllowed(userProfilePlan ?? 'free', customizationPurchased);
   // Only badge users who can't use it yet: signed out (known at once), or a
   // resolved plan without the feature. Suppress it while a signed-in user's
-  // plan is still loading so it never flashes at an entitled user.
+  // plan is still loading so it never flashes at an entitled user. A local
+  // engine never needs an account for this at all.
   const premiumBadge =
-    !user || (userProfilePlan !== undefined && !isDownloadPremium) ? _('Premium') : undefined;
+    !downloads.isLocalEngine && (!user || (userProfilePlan !== undefined && !isDownloadPremium))
+      ? _('Premium')
+      : undefined;
 
   // A book can carry a coverImageUrl that no longer resolves (cover never
   // extracted, file pruned). A broken <img> still occupies its h-32 box, so
