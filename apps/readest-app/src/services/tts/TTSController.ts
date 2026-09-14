@@ -19,6 +19,7 @@ import { WebSpeechClient } from './WebSpeechClient';
 import { NativeTTSClient } from './NativeTTSClient';
 import { PiperTTSClient } from './PiperTTSClient';
 import { EdgeTTSClient } from './EdgeTTSClient';
+import { BufferedTTSClient } from './BufferedTTSClient';
 import { SectionTimeline, TimelineSentence } from './SectionTimeline';
 import { hydrateProvisionalDurations } from './ttsDuration';
 import { DownloadableSentence, SectionEnumerator, TTSDownloader } from './TTSDownloader';
@@ -883,19 +884,30 @@ export class TTSController extends EventTarget {
     }
   }
 
-  // Build a downloader for headless pre-synthesis, or null when the Edge
+  // Whichever engine is actually selected right now, if (and only if) it has
+  // a persistent cache to download into — Edge and Piper both qualify (any
+  // BufferedTTSClient wrapped in a CachingProvider), system/narration
+  // engines don't. Podcast-style chapter/book downloads work the same way
+  // regardless of which one is active.
+  #downloadableClient(): BufferedTTSClient | null {
+    return this.ttsClient instanceof BufferedTTSClient && this.ttsClient.canDownload()
+      ? this.ttsClient
+      : null;
+  }
+
+  // Build a downloader for headless pre-synthesis, or null when the active
   // client has no cache to download into. The enumerator replays the exact
   // live pipeline (per-block SSML -> preprocess -> parseSSMLMarks) on a FRESH
   // document + TTS instance per section, so it never disturbs live playback,
   // and labels sentences identically to ensureTimeline so packs written here
   // and by playback share one manifest.
   canDownload(): boolean {
-    return this.ttsEdgeClient.canDownload();
+    return this.#downloadableClient() !== null;
   }
 
   getTTSDownloader(): TTSDownloader | null {
-    const edge = this.ttsEdgeClient;
-    if (!edge.canDownload()) return null;
+    const client = this.#downloadableClient();
+    if (!client) return null;
     const enumerator: SectionEnumerator = {
       enumerateSection: async (sectionIndex: number) => {
         const sections = this.view.book.sections;
@@ -909,7 +921,7 @@ export class TTSController extends EventTarget {
           const { textWalker } = await import('foliate-js/text-walker.js');
           const nodeFilter = createTTSNodeFilter();
           let granularity: TTSGranularity = this.view.language.isCJK ? 'sentence' : 'word';
-          const supported = edge.getGranularities();
+          const supported = client.getGranularities();
           if (!supported.includes(granularity)) granularity = supported[0]!;
 
           // getSentences enumerates EVERY segment; parseSSMLMarks drops the
@@ -959,32 +971,32 @@ export class TTSController extends EventTarget {
         }
       },
     };
-    return new TTSDownloader(enumerator, edge);
+    return new TTSDownloader(enumerator, client);
   }
 
   // Per-section download status keyed by section index, for the podcast UI.
   async getSectionCacheStatuses() {
-    return this.ttsEdgeClient.getSectionCacheStatuses();
+    return this.#downloadableClient()?.getSectionCacheStatuses() ?? new Map();
   }
 
   async getCacheBytes() {
-    return this.ttsEdgeClient.getCacheBytes();
+    return this.#downloadableClient()?.getCacheBytes() ?? 0;
   }
 
   async beginDownloadSections(sections: number[]) {
-    await this.ttsEdgeClient.beginDownloadSections(sections);
+    await this.#downloadableClient()?.beginDownloadSections(sections);
   }
 
   async completeDownloadSections(sections: number[]) {
-    await this.ttsEdgeClient.completeDownloadSections(sections);
+    await this.#downloadableClient()?.completeDownloadSections(sections);
   }
 
   async cancelDownloadSections(sections: number[]) {
-    await this.ttsEdgeClient.cancelDownloadSections(sections);
+    await this.#downloadableClient()?.cancelDownloadSections(sections);
   }
 
   async clearDownloads() {
-    await this.ttsEdgeClient.clearDownloads();
+    await this.#downloadableClient()?.clearDownloads();
   }
 
   // Whether the active client can ever produce a timeline — it needs a real
