@@ -48,6 +48,7 @@ const makeItem = (
 
 const makeDownloads = (overrides: Partial<UseTTSDownloadsResult> = {}): UseTTSDownloadsResult => ({
   supported: true,
+  isLocalEngine: false,
   chapters,
   statuses: new Map(),
   cacheBytes: 0,
