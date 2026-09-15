@@ -16,20 +16,15 @@ import {
   MdSkipPrevious,
 } from 'react-icons/md';
 import { RiForward30Line, RiReplay15Line, RiVoiceAiFill } from 'react-icons/ri';
-import { useRouter } from 'next/navigation';
 import { TTSVoicesGroup } from '@/services/tts';
 import { MEDIA_OVERLAY_VOICE_ID } from '@/services/tts/mediaOverlay';
 import { useEnv } from '@/context/EnvContext';
-import { useAuth } from '@/context/AuthContext';
 import { useReaderStore } from '@/store/readerStore';
 import { useBookProgress } from '@/store/readerProgressStore';
 import { useBookDataStore } from '@/store/bookDataStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { TranslationFunc, useTranslation } from '@/hooks/useTranslation';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
-import { useQuotaStats } from '@/hooks/useQuotaStats';
-import { isTTSCacheAllowed } from '@/utils/access';
-import { navigateToLogin, navigateToProfile } from '@/utils/nav';
 import { getLanguageName } from '@/utils/lang';
 import { formatPlaybackTime } from '@/utils/time';
 import Dialog from '@/components/Dialog';
@@ -142,32 +137,19 @@ const TTSPlayerSheet = ({
   activeSectionIndex,
 }: TTSPlayerSheetProps) => {
   const _ = useTranslation();
-  const router = useRouter();
   const { envConfig } = useEnv();
-  const { user } = useAuth();
   const { getViewSettings, setViewSettings } = useReaderStore();
   const { getBookData } = useBookDataStore();
   const progress = useBookProgress(bookKey);
   const viewSettings = getViewSettings(bookKey);
 
-  // Offline audio (pre-downloading Read Aloud audio per chapter) is a premium
-  // feature: any paid plan can use it; free / signed-out users see the row with
-  // a Premium badge that routes to the upgrade page instead of the per-chapter
-  // download controls. Mirrors the cloud-sync paywall in IntegrationsPanel.
-  // Exception: Piper runs entirely on-device — the paywall exists to offset
-  // Edge's paid cloud voice usage, which doesn't apply here, so a local
-  // engine always gets the download controls regardless of plan.
-  const { userProfilePlan, customizationPurchased } = useQuotaStats();
-  const isDownloadPremium =
-    downloads.isLocalEngine || isTTSCacheAllowed(userProfilePlan ?? 'free', customizationPurchased);
-  // Only badge users who can't use it yet: signed out (known at once), or a
-  // resolved plan without the feature. Suppress it while a signed-in user's
-  // plan is still loading so it never flashes at an entitled user. A local
-  // engine never needs an account for this at all.
-  const premiumBadge =
-    !downloads.isLocalEngine && (!user || (userProfilePlan !== undefined && !isDownloadPremium))
-      ? _('Premium')
-      : undefined;
+  // Offline audio is available for every cacheable TTS engine. Edge voices
+  // synthesize through the same persistent cache as Piper, so the selected
+  // Edge voice must not be blocked by the account-plan gate. Keep the plan
+  // lookup out of the decision entirely: the download controls follow the
+  // active engine's actual cache capability (`downloads.supported`).
+  const isDownloadPremium = downloads.supported;
+  const premiumBadge = undefined;
 
   // A book can carry a coverImageUrl that no longer resolves (cover never
   // extracted, file pruned). A broken <img> still occupies its h-32 box, so
@@ -291,19 +273,9 @@ const TTSPlayerSheet = ({
     setView('main');
   };
 
-  // Entitled users drill into the per-chapter download view; everyone else is
-  // routed to the upgrade page (or sign-in), the sheet closing first so the
-  // navigation isn't hidden behind it.
+  // Cache-capable TTS engines can open the per-chapter download view directly.
   const handleOpenDownloads = () => {
-    if (isDownloadPremium) {
-      setView('chapters');
-    } else if (user) {
-      onClose();
-      navigateToProfile(router);
-    } else {
-      onClose();
-      navigateToLogin(router);
-    }
+    if (isDownloadPremium) setView('chapters');
   };
 
   const timeoutOptions = getTTSTimeoutOptions(_);
