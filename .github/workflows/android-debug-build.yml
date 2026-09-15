@@ -26,8 +26,6 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: setup pnpm
         uses: pnpm/action-setup@v4
