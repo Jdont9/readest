@@ -137,6 +137,7 @@ const makeProps = (overrides: Record<string, unknown> = {}) => ({
   onPlayFromLyric: vi.fn().mockResolvedValue(undefined),
   downloads: {
     supported: false,
+    isLocalEngine: false,
     chapters: [],
     statuses: new Map(),
     cacheBytes: 0,
