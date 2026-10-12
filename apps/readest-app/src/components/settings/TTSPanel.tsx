@@ -16,6 +16,7 @@ import { getTTSCacheConfig, setTTSCacheConfig } from '@/services/tts/providers/b
 import { BoxedList, SettingsRow, SettingsSelect, SettingsSwitchRow } from './primitives';
 import TTSHighlightStyleEditor, { TTSHighlightStyle } from './theme/TTSHighlightStyleEditor';
 import PiperVoicesSection from './PiperVoicesSection';
+import QwenTTSSection from './QwenTTSSection';
 
 const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }) => {
   const _ = useTranslation();
@@ -159,6 +160,7 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
         data-setting-id='settings.tts.ttsHighlightStyle'
       />
 
+      <QwenTTSSection />
       {appService?.isAndroidApp && <PiperVoicesSection />}
 
       {isJapaneseUI && (

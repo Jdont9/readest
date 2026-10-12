@@ -18,6 +18,7 @@ import { expandRangeOverRuby } from '@/utils/ruby';
 import { WebSpeechClient } from './WebSpeechClient';
 import { NativeTTSClient } from './NativeTTSClient';
 import { PiperTTSClient } from './PiperTTSClient';
+import { QwenTTSClient } from './QwenTTSClient';
 import { EdgeTTSClient } from './EdgeTTSClient';
 import { BufferedTTSClient } from './BufferedTTSClient';
 import { SectionTimeline, TimelineSentence } from './SectionTimeline';
@@ -194,6 +195,8 @@ export class TTSController extends EventTarget {
   ttsEdgeClient: EdgeTTSClient;
   ttsNativeClient: TTSClient | null = null;
   ttsPiperClient: PiperTTSClient | null = null;
+  ttsQwenClient: QwenTTSClient;
+  ttsQwenVoices: TTSVoice[] = [];
   ttsMediaOverlayClient: MediaOverlayClient;
   ttsWebVoices: TTSVoice[] = [];
   ttsEdgeVoices: TTSVoice[] = [];
@@ -213,6 +216,9 @@ export class TTSController extends EventTarget {
     super();
     this.ttsWebClient = new WebSpeechClient(this);
     this.ttsEdgeClient = new EdgeTTSClient(this, appService);
+    // Qwen is an optional remote neural voice service. It is constructed on
+    // every platform and only appears in the picker when its server responds.
+    this.ttsQwenClient = new QwenTTSClient(this, appService);
     // Native TTS is backed by Android TextToSpeech and iOS AVSpeechSynthesizer.
     // TODO: implement native TTS client for desktop platforms.
     if (appService?.isAndroidApp || appService?.isIOSApp) {
@@ -405,6 +411,10 @@ export class TTSController extends EventTarget {
     const availableClients = [];
     if (await this.ttsEdgeClient.init()) {
       availableClients.push(this.ttsEdgeClient);
+    }
+    if (await this.ttsQwenClient.init()) {
+      availableClients.push(this.ttsQwenClient);
+      this.ttsQwenVoices = await this.ttsQwenClient.getAllVoices();
     }
     if (this.ttsNativeClient && (await this.ttsNativeClient.init())) {
       availableClients.push(this.ttsNativeClient);
@@ -1785,6 +1795,7 @@ export class TTSController extends EventTarget {
     if (this.ttsWebClient.initialized) this.ttsWebClient.setPrimaryLang(lang);
     if (this.ttsNativeClient?.initialized) this.ttsNativeClient?.setPrimaryLang(lang);
     if (this.ttsPiperClient?.initialized) this.ttsPiperClient?.setPrimaryLang(lang);
+    if (this.ttsQwenClient.initialized) this.ttsQwenClient.setPrimaryLang(lang);
     if (this.ttsMediaOverlayClient.initialized) this.ttsMediaOverlayClient.setPrimaryLang(lang);
   }
 
@@ -1802,6 +1813,8 @@ export class TTSController extends EventTarget {
     const ttsEdgeVoices = await this.ttsEdgeClient.getVoices(lang);
     const ttsNativeVoices = (await this.ttsNativeClient?.getVoices(lang)) ?? [];
     const ttsPiperVoices = (await this.ttsPiperClient?.getVoices(lang)) ?? [];
+    const ttsQwenVoices = await this.ttsQwenClient.getVoices(lang);
+    this.ttsQwenVoices = await this.ttsQwenClient.getAllVoices();
     // The book's own narrator leads the list when there is one: it is the best
     // voice available for that book by a wide margin.
     const narrationVoices = this.narrationAvailable
@@ -1812,6 +1825,7 @@ export class TTSController extends EventTarget {
       ...narrationVoices,
       ...ttsNativeVoices,
       ...ttsPiperVoices,
+      ...ttsQwenVoices,
       ...ttsEdgeVoices,
       ...ttsWebVoices,
     ];
@@ -1841,6 +1855,9 @@ export class TTSController extends EventTarget {
       return;
     }
 
+    const useQwenTTS = !!this.ttsQwenVoices.find(
+      (voice) => (voiceId === '' || voice.id === voiceId) && !voice.disabled,
+    );
     const useEdgeTTS = !!this.ttsEdgeVoices.find(
       (voice) => (voiceId === '' || voice.id === voiceId) && !voice.disabled,
     );
@@ -1858,7 +1875,10 @@ export class TTSController extends EventTarget {
     const usePiperTTS = !!this.ttsPiperVoices.find(
       (voice) => (voiceId === '' || voice.id === voiceId) && !voice.disabled,
     );
-    if (useEdgeTTS) {
+    if (useQwenTTS) {
+      this.ttsClient = this.ttsQwenClient;
+      await this.ttsClient.setRate(this.ttsRate);
+    } else if (useEdgeTTS) {
       this.ttsClient = this.ttsEdgeClient;
       await this.ttsClient.setRate(this.ttsRate);
     } else if (useNativeTTS) {
@@ -2206,6 +2226,9 @@ export class TTSController extends EventTarget {
     }
     if (this.ttsEdgeClient.initialized) {
       await this.ttsEdgeClient.shutdown();
+    }
+    if (this.ttsQwenClient.initialized) {
+      await this.ttsQwenClient.shutdown();
     }
     if (this.ttsNativeClient?.initialized) {
       await this.ttsNativeClient.shutdown();

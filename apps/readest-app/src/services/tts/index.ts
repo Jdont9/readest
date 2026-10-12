@@ -13,3 +13,6 @@ export {
 export * from './TTSSessionManager';
 export { ttsMediaBridge, unblockAudio, releaseUnblockAudio } from './ttsMediaBridge';
 export { SectionTimeline } from './SectionTimeline';
+
+export * from './QwenTTSClient';
+export * from './providers/qwen';
