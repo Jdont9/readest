@@ -43,7 +43,7 @@ const QWEN_VOICES: TTSVoice[] = [
 ];
 
 function languageName(locale: string): string {
-  const base = locale.toLowerCase().split('-')[0];
+  const base = locale.toLowerCase().split('-')[0] ?? '';
   const names: Record<string, string> = {
     fr: 'French', en: 'English', zh: 'Chinese', ja: 'Japanese', ko: 'Korean',
     de: 'German', es: 'Spanish', it: 'Italian', pt: 'Portuguese', ru: 'Russian',

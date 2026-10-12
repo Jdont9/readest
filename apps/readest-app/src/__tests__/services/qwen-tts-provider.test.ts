@@ -29,7 +29,7 @@ describe('QwenSpeechProvider', () => {
     );
     expect(result.audio.byteLength).toBe(64);
     expect(result.boundaries).toEqual([]);
-    const request = vi.mocked(fetch).mock.calls[1][1];
+    const request = vi.mocked(fetch).mock.calls[1]?.[1];
     const payload = JSON.parse(String(request?.body));
     expect(payload.input).toBe('Elle ouvrit le chat.');
     expect(payload.language).toBe('French');
