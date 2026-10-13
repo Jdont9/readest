@@ -1,5 +1,11 @@
 """Minimal HTTP adapter for Qwen3-TTS, intended for Readest's Qwen provider.
 
+Two modes (env QWEN_TTS_MODE):
+  custom (default): Qwen3-TTS CustomVoice, built-in speakers (Serena, ...).
+  clone:            Qwen3-TTS Base, clones the voice of a reference clip
+                    (QWEN_TTS_REF_AUDIO, with its transcript QWEN_TTS_REF_TEXT).
+                    Every Readest voice id maps to that one cloned narrator.
+
 Install requirements.txt, then run this script on a machine with a supported
 GPU (or enough CPU/RAM). For LAN use, protect this endpoint with a firewall;
 this development adapter intentionally does not implement authentication.
@@ -20,13 +26,23 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from qwen_tts import Qwen3TTSModel
 
+MODE = os.environ.get("QWEN_TTS_MODE", "custom").lower()
+if MODE not in ("custom", "clone"):
+    raise RuntimeError("QWEN_TTS_MODE must be 'custom' or 'clone'")
 MODEL_ID = os.environ.get(
-    "QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+    "QWEN_TTS_MODEL",
+    "Qwen/Qwen3-TTS-12Hz-1.7B-Base" if MODE == "clone" else "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
 )
+REF_AUDIO = os.environ.get("QWEN_TTS_REF_AUDIO", "")
+REF_TEXT = os.environ.get("QWEN_TTS_REF_TEXT", "").strip()
 DEVICE_MAP = os.environ.get("QWEN_TTS_DEVICE_MAP", "cuda:0" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else (
     torch.float16 if torch.cuda.is_available() else torch.float32
 )
+FALLBACK_SPEAKER = "Serena"
+KNOWN_SPEAKERS = {
+    "Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric", "Ryan", "Aiden", "Ono_Anna", "Sohee",
+}
 
 app = FastAPI(title="Readest Qwen3-TTS adapter")
 # The reader app runs in a WebView origin distinct from the LAN server. This
@@ -37,13 +53,14 @@ app.add_middleware(
     allow_headers=["*"]
 )
 model = None
+clone_prompt = None
 model_lock = threading.Lock()
 
 
 class SpeechRequest(BaseModel):
     model: str = MODEL_ID
     input: str = Field(min_length=1, max_length=6000)
-    voice: str = "Serena"
+    voice: str = FALLBACK_SPEAKER
     language: str = "French"
     instructions: str = "Read naturally and preserve the source language."
     response_format: Literal["wav", "mp3"] = "wav"
@@ -51,17 +68,49 @@ class SpeechRequest(BaseModel):
 
 @app.on_event("startup")
 def load_model() -> None:
-    global model
+    global model, clone_prompt
+    if MODE == "clone" and not (REF_AUDIO and os.path.exists(REF_AUDIO)):
+        raise RuntimeError("clone mode needs QWEN_TTS_REF_AUDIO pointing to an existing file")
     model = Qwen3TTSModel.from_pretrained(
         MODEL_ID,
         device_map=DEVICE_MAP,
         dtype=DTYPE,
     )
+    if MODE == "clone":
+        # Encode the reference once; every request reuses the prompt. Without a
+        # transcript only the speaker embedding is used (lower similarity).
+        try:
+            clone_prompt = model.create_voice_clone_prompt(
+                ref_audio=REF_AUDIO,
+                ref_text=REF_TEXT or None,
+                x_vector_only_mode=not REF_TEXT,
+            )
+        except AttributeError:
+            clone_prompt = None  # older qwen-tts: pass the reference per call
 
 
 @app.get("/health")
 def health():
-    return {"ok": model is not None, "model": MODEL_ID}
+    return {"ok": model is not None, "model": MODEL_ID, "mode": MODE}
+
+
+def _generate(request: SpeechRequest):
+    if MODE == "clone":
+        kwargs = {"text": request.input, "language": request.language}
+        if clone_prompt is not None:
+            kwargs["voice_clone_prompt"] = clone_prompt
+        else:
+            kwargs.update(ref_audio=REF_AUDIO, ref_text=REF_TEXT or None,
+                          x_vector_only_mode=not REF_TEXT)
+        return model.generate_voice_clone(**kwargs)
+    # Readest's "Narrateur" (cloned) voice has no meaning for built-in speakers.
+    speaker = request.voice if request.voice in KNOWN_SPEAKERS else FALLBACK_SPEAKER
+    return model.generate_custom_voice(
+        text=request.input,
+        language=request.language,
+        speaker=speaker,
+        instruct=request.instructions,
+    )
 
 
 @app.post("/v1/audio/speech")
@@ -71,12 +120,7 @@ def speech(request: SpeechRequest):
     try:
         # Model inference is serialized to avoid concurrent GPU memory spikes.
         with model_lock, torch.inference_mode():
-            wavs, sample_rate = model.generate_custom_voice(
-                text=request.input,
-                language=request.language,
-                speaker=request.voice,
-                instruct=request.instructions,
-            )
+            wavs, sample_rate = _generate(request)
         audio = np.asarray(wavs[0], dtype=np.float32)
         buffer = io.BytesIO()
         if request.response_format == "mp3":

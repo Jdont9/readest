@@ -31,6 +31,9 @@ export function setQwenTTSBaseUrl(url: string): void {
 }
 
 const QWEN_VOICES: TTSVoice[] = [
+  // Cloned narrator: only meaningful when the server runs in clone mode
+  // (the CustomVoice server maps it to Serena).
+  { id: 'Narrateur', name: 'Narrateur · voix clonée', lang: 'fr-FR' },
   { id: 'Vivian', name: 'Vivian · expressive', lang: 'fr-FR' },
   { id: 'Serena', name: 'Serena · douce', lang: 'fr-FR' },
   { id: 'Uncle_Fu', name: 'Uncle Fu · grave', lang: 'fr-FR' },
@@ -127,6 +130,6 @@ export class QwenSpeechProvider implements SpeechProvider {
   }
 
   pickDefaultVoice(voices: TTSVoice[]): string | undefined {
-    return voices.find((voice) => voice.id === 'Serena')?.id || voices[0]?.id;
+    return voices.find((voice) => voice.id === 'Narrateur')?.id || voices[0]?.id;
   }
 }
