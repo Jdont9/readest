@@ -46,7 +46,7 @@ class SpeechRequest(BaseModel):
     voice: str = "Serena"
     language: str = "French"
     instructions: str = "Read naturally and preserve the source language."
-    response_format: Literal["wav"] = "wav"
+    response_format: Literal["wav", "mp3"] = "wav"
 
 
 @app.on_event("startup")
@@ -79,7 +79,14 @@ def speech(request: SpeechRequest):
             )
         audio = np.asarray(wavs[0], dtype=np.float32)
         buffer = io.BytesIO()
-        sf.write(buffer, audio, sample_rate, format="WAV", subtype="PCM_16")
-        return Response(content=buffer.getvalue(), media_type="audio/wav")
+        if request.response_format == "mp3":
+            # ~10x smaller than WAV, and concatenated sentence MP3s stay a
+            # playable chapter file (Readest packs sentences back to back).
+            sf.write(buffer, audio, sample_rate, format="MP3")
+            media_type = "audio/mpeg"
+        else:
+            sf.write(buffer, audio, sample_rate, format="WAV", subtype="PCM_16")
+            media_type = "audio/wav"
+        return Response(content=buffer.getvalue(), media_type=media_type)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Synthesis failed: {exc}") from exc

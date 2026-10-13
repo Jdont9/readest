@@ -993,6 +993,10 @@ export class TTSController extends EventTarget {
     return this.#downloadableClient()?.getCacheBytes() ?? 0;
   }
 
+  async readSectionPack(section: number): Promise<ArrayBuffer | null> {
+    return (await this.#downloadableClient()?.readSectionPack(section)) ?? null;
+  }
+
   async beginDownloadSections(sections: number[]) {
     await this.#downloadableClient()?.beginDownloadSections(sections);
   }

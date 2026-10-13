@@ -13,6 +13,7 @@
 import type { TTSDownloadItem } from '@/store/ttsDownloadStore';
 import { useTTSDownloadStore } from '@/store/ttsDownloadStore';
 import type { DownloadChapter } from './downloadChapters';
+import { exportChapterAudio } from './chapterExport';
 import type { TTSController } from './TTSController';
 import type { SectionDownloadProgress } from './TTSDownloader';
 
@@ -180,7 +181,9 @@ export class TTSDownloadManager {
         return !status?.pinned || !status.packed;
       });
       if (sections.length === 0) {
-        // Everything already packed while queued: nothing to download.
+        // Everything already packed while queued: nothing to download, but an
+        // export folder may have been chosen since, so (re)export the files.
+        await this.#exportChapter(controller, item);
         if (useTTSDownloadStore.getState().items[item.id]?.status === 'pending') {
           store.removeItem(item.id);
           this.persist();
@@ -273,6 +276,8 @@ export class TTSDownloadManager {
           await this.#cancelActive(active);
           return true;
         }
+        await this.#exportChapter(controller, item);
+        if (!isCurrent()) return true;
         finish();
       }
     } catch (err) {
@@ -295,6 +300,19 @@ export class TTSDownloadManager {
       }
     }
     return true;
+  }
+
+  // Write the chapter as an MP3 into the user's export folder (if any).
+  // Best-effort: a failed export must never turn a finished download into a
+  // failed one.
+  async #exportChapter(controller: TTSController, item: TTSDownloadItem): Promise<void> {
+    const appService = controller.appService;
+    if (!appService) return;
+    try {
+      await exportChapterAudio(appService, controller, item);
+    } catch (err) {
+      console.warn('[TTS] chapter export failed', item.id, err);
+    }
   }
 
   #cancelActive(active: ActiveDownload): Promise<void> {

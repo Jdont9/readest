@@ -14,6 +14,10 @@ export interface DownloadChapter {
   startSection: number;
   // Exclusive: the sections this chapter downloads are [startSection, endSection).
   endSection: number;
+  // 1-based position in reading order and the chapter count, used to prefix
+  // exported audio file names so they sort in reading order.
+  order?: number;
+  orderTotal?: number;
 }
 
 export type ChapterDownloadStatus = 'none' | 'partial' | 'complete';
@@ -71,6 +75,8 @@ export const deriveDownloadChapters = async (
       depth: 0,
       startSection: i,
       endSection: i + 1,
+      order: i + 1,
+      orderTotal: sectionCount,
     }));
   }
 
@@ -83,6 +89,8 @@ export const deriveDownloadChapters = async (
     depth: anchor.depth,
     startSection: anchor.startSection,
     endSection: i + 1 < anchors.length ? anchors[i + 1]!.startSection : sectionCount,
+    order: i + 1,
+    orderTotal: anchors.length,
   }));
 };
 

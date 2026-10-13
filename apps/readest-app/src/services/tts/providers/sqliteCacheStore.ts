@@ -927,6 +927,20 @@ export class SqliteTTSCacheStore implements TTSCacheStore {
     return rows.length > 0;
   }
 
+  // The whole current pack of a section (its sentence MP3s concatenated in
+  // reading order), or null when the section is not fully packed.
+  async readSectionPack(section: number): Promise<ArrayBuffer | null> {
+    await this.#ensureSchema();
+    const rows = await this.#db.select<DatabaseRow & { path: string }>(
+      `SELECT p.path FROM packs p
+         JOIN manifests m ON m.section = p.section AND ${CURRENT_PACK_PREDICATE}
+        WHERE p.section = ? ORDER BY p.created_at DESC LIMIT 1`,
+      [section],
+    );
+    const path = rows[0]?.path;
+    return path ? this.readPackBytes(path) : null;
+  }
+
   async readPackBytes(name: string): Promise<ArrayBuffer | null> {
     if (!this.#packFs) return null;
     await this.#ensureSchema();

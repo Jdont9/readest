@@ -19,7 +19,7 @@ describe('QwenSpeechProvider', () => {
       'fetch',
       vi.fn()
         .mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }))
-        .mockResolvedValueOnce(new Response(audio, { status: 200, headers: { 'Content-Type': 'audio/wav' } })),
+        .mockResolvedValueOnce(new Response(audio, { status: 200, headers: { 'Content-Type': 'audio/mpeg' } })),
     );
     const provider = new QwenSpeechProvider();
     await provider.init();
@@ -33,6 +33,7 @@ describe('QwenSpeechProvider', () => {
     const payload = JSON.parse(String(request?.body));
     expect(payload.input).toBe('Elle ouvrit le chat.');
     expect(payload.language).toBe('French');
+    expect(payload.response_format).toBe('mp3');
     expect(payload.instructions).toContain('sentence context');
   });
 

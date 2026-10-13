@@ -277,6 +277,11 @@ export class BookTTSCacheStore implements TTSCacheStore {
     return opened ? opened.store.totalCacheBytes() : 0;
   }
 
+  async readSectionPack(section: number): Promise<ArrayBuffer | null> {
+    const opened = await this.#open();
+    return opened ? opened.store.readSectionPack(section) : null;
+  }
+
   async #syncDownloadMarker(bookHash: string, store: SqliteTTSCacheStore): Promise<void> {
     const path = `tts-cache/${bookHash}/${DOWNLOADS_MARKER}`;
     try {

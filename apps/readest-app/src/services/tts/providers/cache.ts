@@ -50,6 +50,8 @@ export interface TTSCacheStore {
   // duration hydration so downloaded chapters report a measured timeline.
   getSectionDurations?(section: number, voice: string): Promise<Map<number, number>>;
   totalCacheBytes?(): Promise<number>;
+  // Full audio of a packed section (concatenated MP3), for exporting chapters.
+  readSectionPack?(section: number): Promise<ArrayBuffer | null>;
   // Flush and release backing resources (the per-book database handle).
   close?(): Promise<void>;
 }
@@ -199,6 +201,15 @@ export class CachingProvider implements SpeechProvider {
 
   async totalCacheBytes(): Promise<number> {
     return (await this.#store.totalCacheBytes?.()) ?? 0;
+  }
+
+  async readSectionPack(section: number): Promise<ArrayBuffer | null> {
+    try {
+      return (await this.#store.readSectionPack?.(section)) ?? null;
+    } catch (err) {
+      console.warn('TTS section pack read failed', err);
+      return null;
+    }
   }
 
   async shutdown(): Promise<void> {

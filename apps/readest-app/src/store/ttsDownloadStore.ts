@@ -23,6 +23,10 @@ export interface TTSDownloadItem {
   // the book's TOC to be resolvable again.
   startSection: number;
   endSection: number;
+  // Reading-order position (see DownloadChapter); absent on rows persisted
+  // before exports existed.
+  order?: number;
+  orderTotal?: number;
   status: TTSDownloadStatus;
   // Sentence progress, accumulated across the chapter's sections. Totals are
   // only known once each section enumerates, so total lags by one section.
@@ -64,6 +68,8 @@ export const useTTSDownloadStore = create<TTSDownloadState>((set, get) => ({
       label: chapter.label,
       startSection: chapter.startSection,
       endSection: chapter.endSection,
+      order: chapter.order,
+      orderTotal: chapter.orderTotal,
       status: 'pending',
       done: 0,
       total: 0,

@@ -17,6 +17,7 @@ import { BoxedList, SettingsRow, SettingsSelect, SettingsSwitchRow } from './pri
 import TTSHighlightStyleEditor, { TTSHighlightStyle } from './theme/TTSHighlightStyleEditor';
 import PiperVoicesSection from './PiperVoicesSection';
 import QwenTTSSection from './QwenTTSSection';
+import TTSExportSection from './TTSExportSection';
 
 const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }) => {
   const _ = useTranslation();
@@ -161,6 +162,7 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
       />
 
       <QwenTTSSection />
+      <TTSExportSection />
       {appService?.isAndroidApp && <PiperVoicesSection />}
 
       {isJapaneseUI && (

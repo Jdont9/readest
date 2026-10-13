@@ -716,6 +716,11 @@ export class BufferedTTSClient implements TTSClient {
     return this.provider.getSectionStatuses();
   }
 
+  async readSectionPack(section: number): Promise<ArrayBuffer | null> {
+    if (!(this.provider instanceof CachingProvider)) return null;
+    return this.provider.readSectionPack(section);
+  }
+
   async getCacheBytes(): Promise<number> {
     if (!(this.provider instanceof CachingProvider)) return 0;
     return this.provider.totalCacheBytes();

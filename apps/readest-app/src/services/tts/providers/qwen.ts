@@ -97,7 +97,7 @@ export class QwenSpeechProvider implements SpeechProvider {
 
     const response = await fetch(`${getQwenTTSBaseUrl()}/v1/audio/speech`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'audio/wav' },
+      headers: { 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
       signal,
       body: JSON.stringify({
         model: 'Qwen3-TTS-12Hz-1.7B-CustomVoice',
@@ -105,7 +105,7 @@ export class QwenSpeechProvider implements SpeechProvider {
         voice: req.voice,
         language: languageName(req.lang),
         instructions: buildQwenInstructions(req.lang),
-        response_format: 'wav',
+        response_format: 'mp3',
       }),
     });
     if (!response.ok) {
@@ -119,9 +119,9 @@ export class QwenSpeechProvider implements SpeechProvider {
     }
     const audio = await response.arrayBuffer();
     if (audio.byteLength < 44) {
-      throw new SpeechSynthesisPermanentError('Qwen TTS returned an empty or invalid WAV response');
+      throw new SpeechSynthesisPermanentError('Qwen TTS returned an empty or invalid audio response');
     }
-    // The current server returns WAV without word timings. Readest will use
+    // The server returns MP3 (so packed chapters are valid MP3 files) without word timings. Readest will use
     // its normal sentence-level highlighting fallback.
     return { audio, boundaries: [] };
   }
