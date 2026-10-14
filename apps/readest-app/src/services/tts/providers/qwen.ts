@@ -12,6 +12,31 @@ import {
 export const QWEN_TTS_BASE_URL_KEY = 'qwenTTSBaseUrl';
 export const DEFAULT_QWEN_TTS_BASE_URL = 'http://127.0.0.1:8000';
 
+export const QWEN_TTS_CONCURRENCY_KEY = 'qwenTTSDownloadConcurrency';
+const DEFAULT_QWEN_DOWNLOAD_CONCURRENCY = 6;
+const MAX_QWEN_DOWNLOAD_CONCURRENCY = 10;
+// Batch size the server advertised on /health (null until probed).
+let serverMaxBatch: number | null = null;
+
+/**
+ * How many sentences a chapter download sends at once. Defaults to the batch
+ * size the server announces (so the GPU gets full batches), unless the user
+ * overrode it in localStorage under `qwenTTSDownloadConcurrency`.
+ */
+export function getQwenDownloadConcurrency(): number {
+  let configured = 0;
+  try {
+    configured = Number(globalThis.localStorage?.getItem(QWEN_TTS_CONCURRENCY_KEY));
+  } catch {
+    // Storage unavailable: fall through to the server/default value.
+  }
+  const value =
+    Number.isFinite(configured) && configured >= 1
+      ? configured
+      : (serverMaxBatch ?? DEFAULT_QWEN_DOWNLOAD_CONCURRENCY);
+  return Math.min(MAX_QWEN_DOWNLOAD_CONCURRENCY, Math.max(1, Math.floor(value)));
+}
+
 export function getQwenTTSBaseUrl(): string {
   try {
     const configured = globalThis.localStorage?.getItem(QWEN_TTS_BASE_URL_KEY)?.trim();
@@ -81,6 +106,17 @@ export class QwenSpeechProvider implements SpeechProvider {
         signal: AbortSignal.timeout(2500),
       });
       this.#available = response.ok;
+      serverMaxBatch = null;
+      if (response.ok) {
+        // Optional: an older server (or a mock) without a JSON body is fine.
+        try {
+          const health = (await response.json()) as { max_batch?: unknown };
+          const advertised = Number(health?.max_batch);
+          if (Number.isFinite(advertised) && advertised >= 1) serverMaxBatch = advertised;
+        } catch {
+          // Keep the default concurrency.
+        }
+      }
     } catch {
       this.#available = false;
     }

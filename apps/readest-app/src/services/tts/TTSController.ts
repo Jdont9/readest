@@ -19,6 +19,7 @@ import { WebSpeechClient } from './WebSpeechClient';
 import { NativeTTSClient } from './NativeTTSClient';
 import { PiperTTSClient } from './PiperTTSClient';
 import { QwenTTSClient } from './QwenTTSClient';
+import { getQwenDownloadConcurrency } from './providers/qwen';
 import { EdgeTTSClient } from './EdgeTTSClient';
 import { BufferedTTSClient } from './BufferedTTSClient';
 import { SectionTimeline, TimelineSentence } from './SectionTimeline';
@@ -981,7 +982,9 @@ export class TTSController extends EventTarget {
         }
       },
     };
-    return new TTSDownloader(enumerator, client);
+    return new TTSDownloader(enumerator, client, {
+      concurrency: client === this.ttsQwenClient ? getQwenDownloadConcurrency() : 1,
+    });
   }
 
   // Per-section download status keyed by section index, for the podcast UI.

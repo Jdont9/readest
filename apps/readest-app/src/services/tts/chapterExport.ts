@@ -66,30 +66,34 @@ export interface SectionPackReader {
 const isRiff = (bytes: Uint8Array): boolean =>
   bytes.length >= 4 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
 
-// Returns the written file name, or null when nothing was exported (no folder
-// configured, a section is not packed yet, or the audio is not MP3).
+export type ChapterExportResult =
+  | { ok: true; name: string }
+  | { ok: false; reason: 'no-folder' | 'not-packed' | 'wav-audio' };
+
+// Never throws for expected situations: the reason says why nothing was
+// written so the caller can tell the user instead of failing silently.
 export const exportChapterAudio = async (
   appService: AppService,
   reader: SectionPackReader,
   chapter: ExportableChapter,
-): Promise<string | null> => {
+): Promise<ChapterExportResult> => {
   const dir = getTTSExportDir();
-  if (!dir) return null;
+  if (!dir) return { ok: false, reason: 'no-folder' };
 
   const parts: Uint8Array[] = [];
   for (let section = chapter.startSection; section < chapter.endSection; section++) {
     const pack = await reader.readSectionPack(section);
-    if (!pack) return null;
+    if (!pack) return { ok: false, reason: 'not-packed' };
     const bytes = new Uint8Array(pack);
     if (isRiff(bytes)) {
       // Audio cached before the server switched to MP3: concatenated WAVs are
       // not a valid file. Clear the book's offline audio and download again.
       console.warn('[TTS] chapter export skipped: cached audio is WAV, not MP3');
-      return null;
+      return { ok: false, reason: 'wav-audio' };
     }
     parts.push(bytes);
   }
-  if (!parts.length) return null;
+  if (!parts.length) return { ok: false, reason: 'not-packed' };
 
   const merged = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
   let offset = 0;
@@ -102,5 +106,5 @@ export const exportChapterAudio = async (
   const name = chapterExportFileName(chapter);
   await appService.createDir(dir, 'None', true);
   await appService.writeFile(await join(dir, name), 'None', merged.buffer as ArrayBuffer);
-  return name;
+  return { ok: true, name };
 };

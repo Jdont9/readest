@@ -61,13 +61,26 @@ export interface DownloadResult {
   synthesized: number;
 }
 
+export interface TTSDownloaderOptions {
+  // Sentences of one section synthesized at the same time. Servers that can
+  // batch requests (Qwen) go much faster with several in flight; engines that
+  // rate-limit keep the default of 1 (strictly sequential).
+  concurrency?: number;
+}
+
 export class TTSDownloader {
   #enumerator: SectionEnumerator;
   #warmer: CacheWarmer;
+  #concurrency: number;
 
-  constructor(enumerator: SectionEnumerator, warmer: CacheWarmer) {
+  constructor(
+    enumerator: SectionEnumerator,
+    warmer: CacheWarmer,
+    options: TTSDownloaderOptions = {},
+  ) {
     this.#enumerator = enumerator;
     this.#warmer = warmer;
+    this.#concurrency = Math.max(1, Math.floor(options.concurrency ?? 1));
   }
 
   async download(
@@ -96,22 +109,36 @@ export class TTSDownloader {
       let synthesized = 0;
       let failed = false;
       let aborted = false;
-      for (let done = 0; done < sentences.length; done++) {
-        if (signal?.aborted) {
-          aborted = true;
-          break;
+      let next = 0;
+      let done = 0;
+      // A sliding window of `concurrency` workers pulling the next sentence in
+      // reading order. Completion order may differ, but every result is keyed
+      // by its ordinal, so the manifest and the pack stay in reading order.
+      const worker = async () => {
+        for (;;) {
+          if (signal?.aborted) {
+            if (next < sentences.length) aborted = true;
+            return;
+          }
+          const index = next++;
+          if (index >= sentences.length) return;
+          const s = sentences[index]!;
+          const ok = await this.#warmer.warmSentence(
+            sectionIndex,
+            s.ordinal,
+            s.lang,
+            s.text,
+            signal,
+          );
+          if (ok) synthesized++;
+          else failed = true;
+          done++;
+          onProgress?.({ sectionIndex, total: sentences.length, done, synthesized });
         }
-        const s = sentences[done]!;
-        const ok = await this.#warmer.warmSentence(sectionIndex, s.ordinal, s.lang, s.text, signal);
-        if (ok) synthesized++;
-        else failed = true;
-        onProgress?.({
-          sectionIndex,
-          total: sentences.length,
-          done: done + 1,
-          synthesized,
-        });
-      }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(this.#concurrency, sentences.length) }, worker),
+      );
 
       // Compact whatever completed. A section left partial by an abort or an
       // offline miss simply will not form a pack until the gap fills on a

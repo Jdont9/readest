@@ -13,6 +13,7 @@
 import type { TTSDownloadItem } from '@/store/ttsDownloadStore';
 import { useTTSDownloadStore } from '@/store/ttsDownloadStore';
 import type { DownloadChapter } from './downloadChapters';
+import { eventDispatcher } from '@/utils/event';
 import { exportChapterAudio } from './chapterExport';
 import type { TTSController } from './TTSController';
 import type { SectionDownloadProgress } from './TTSDownloader';
@@ -308,10 +309,25 @@ export class TTSDownloadManager {
   async #exportChapter(controller: TTSController, item: TTSDownloadItem): Promise<void> {
     const appService = controller.appService;
     if (!appService) return;
+    const toast = (type: 'info' | 'error', message: string) =>
+      eventDispatcher.dispatch('toast', { type, message });
     try {
-      await exportChapterAudio(appService, controller, item);
+      const result = await exportChapterAudio(appService, controller, item);
+      if (result.ok) {
+        console.info('[TTS] chapter exported', result.name);
+        toast('info', `Exporté : ${result.name}`);
+      } else if (result.reason === 'wav-audio') {
+        toast(
+          'error',
+          "Export ignoré : l'audio en cache est en WAV. Vide l'audio hors ligne du livre et retélécharge.",
+        );
+      } else if (result.reason === 'not-packed') {
+        toast('error', "Export ignoré : l'audio du chapitre n'est pas encore assemblé dans le cache.");
+      }
+      // 'no-folder': export not configured, stay quiet.
     } catch (err) {
       console.warn('[TTS] chapter export failed', item.id, err);
+      toast('error', `Échec de l'export : ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

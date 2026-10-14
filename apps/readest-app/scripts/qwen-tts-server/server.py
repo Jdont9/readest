@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import io
 import os
+import queue
 import threading
+import time
 from typing import Literal
 
 import numpy as np
@@ -39,6 +41,13 @@ DEVICE_MAP = os.environ.get("QWEN_TTS_DEVICE_MAP", "cuda:0" if torch.cuda.is_ava
 DTYPE = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else (
     torch.float16 if torch.cuda.is_available() else torch.float32
 )
+# Concurrent requests (Readest downloads send several sentences at once) are
+# grouped into ONE model call: autoregressive decoding is memory-bound, so a
+# batch of N sentences costs little more than a single one. Tune the size to
+# the GPU (T4: 4-6, L4/A100: 8-10).
+MAX_BATCH = max(1, int(os.environ.get("QWEN_TTS_MAX_BATCH", "6")))
+# How long the worker waits for more requests before running a partial batch.
+BATCH_WAIT_S = max(0.0, float(os.environ.get("QWEN_TTS_BATCH_WAIT_MS", "120"))) / 1000
 FALLBACK_SPEAKER = "Serena"
 KNOWN_SPEAKERS = {
     "Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric", "Ryan", "Aiden", "Ono_Anna", "Sohee",
@@ -54,7 +63,18 @@ app.add_middleware(
 )
 model = None
 clone_prompt = None
-model_lock = threading.Lock()
+
+
+class _Job:
+    def __init__(self, request: "SpeechRequest") -> None:
+        self.request = request
+        self.done = threading.Event()
+        self.audio: np.ndarray | None = None
+        self.sample_rate = 0
+        self.error: Exception | None = None
+
+
+_jobs: "queue.Queue[_Job]" = queue.Queue()
 
 
 class SpeechRequest(BaseModel):
@@ -91,10 +111,11 @@ def load_model() -> None:
 
 @app.get("/health")
 def health():
-    return {"ok": model is not None, "model": MODEL_ID, "mode": MODE}
+    return {"ok": model is not None, "model": MODEL_ID, "mode": MODE, "max_batch": MAX_BATCH}
 
 
-def _generate(request: SpeechRequest):
+def _generate_one(request: SpeechRequest):
+    """Single request: the original, known-good call."""
     if MODE == "clone":
         kwargs = {"text": request.input, "language": request.language}
         if clone_prompt is not None:
@@ -113,24 +134,94 @@ def _generate(request: SpeechRequest):
     )
 
 
+def _generate_many(requests: list[SpeechRequest]):
+    """One model call for several requests (list arguments)."""
+    n = len(requests)
+    texts = [r.input for r in requests]
+    languages = [r.language for r in requests]
+    if MODE == "clone":
+        kwargs = {"text": texts, "language": languages}
+        if clone_prompt is not None:
+            # The reference prompt is encoded once; repeat it for every item.
+            kwargs["voice_clone_prompt"] = (
+                list(clone_prompt) * n if isinstance(clone_prompt, (list, tuple)) else [clone_prompt] * n
+            )
+        else:
+            kwargs.update(ref_audio=[REF_AUDIO] * n, ref_text=[REF_TEXT or None] * n,
+                          x_vector_only_mode=not REF_TEXT)
+        return model.generate_voice_clone(**kwargs)
+    return model.generate_custom_voice(
+        text=texts,
+        language=languages,
+        speaker=[r.voice if r.voice in KNOWN_SPEAKERS else FALLBACK_SPEAKER for r in requests],
+        instruct=[r.instructions for r in requests],
+    )
+
+
+def _run_batch(batch: list[_Job]) -> None:
+    if len(batch) > 1:
+        try:
+            with torch.inference_mode():
+                wavs, sample_rate = _generate_many([job.request for job in batch])
+            if len(wavs) != len(batch):
+                raise RuntimeError(f"batch returned {len(wavs)} clips for {len(batch)} requests")
+            for job, wav in zip(batch, wavs):
+                job.audio, job.sample_rate = np.asarray(wav, dtype=np.float32), sample_rate
+                job.done.set()
+            return
+        except Exception as exc:  # noqa: BLE001 - fall back to one-by-one below
+            print(f"[batch] {len(batch)} requests failed as a batch ({exc!r}); retrying one by one",
+                  flush=True)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+    for job in batch:
+        try:
+            with torch.inference_mode():
+                wavs, sample_rate = _generate_one(job.request)
+            job.audio, job.sample_rate = np.asarray(wavs[0], dtype=np.float32), sample_rate
+        except Exception as exc:  # noqa: BLE001 - reported to the caller
+            job.error = exc
+        job.done.set()
+
+
+def _worker() -> None:
+    """The only thread that touches the model: collects a batch, runs it."""
+    while True:
+        batch = [_jobs.get()]
+        deadline = time.monotonic() + BATCH_WAIT_S
+        while len(batch) < MAX_BATCH:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                batch.append(_jobs.get(timeout=remaining))
+            except queue.Empty:
+                break
+        _run_batch(batch)
+
+
+threading.Thread(target=_worker, name="tts-batch-worker", daemon=True).start()
+
+
 @app.post("/v1/audio/speech")
 def speech(request: SpeechRequest):
     if model is None:
         raise HTTPException(status_code=503, detail="Qwen model is not loaded")
+    job = _Job(request)
+    _jobs.put(job)
+    job.done.wait()
+    if job.error is not None or job.audio is None:
+        raise HTTPException(status_code=500, detail=f"Synthesis failed: {job.error}")
     try:
-        # Model inference is serialized to avoid concurrent GPU memory spikes.
-        with model_lock, torch.inference_mode():
-            wavs, sample_rate = _generate(request)
-        audio = np.asarray(wavs[0], dtype=np.float32)
         buffer = io.BytesIO()
         if request.response_format == "mp3":
             # ~10x smaller than WAV, and concatenated sentence MP3s stay a
             # playable chapter file (Readest packs sentences back to back).
-            sf.write(buffer, audio, sample_rate, format="MP3")
+            sf.write(buffer, job.audio, job.sample_rate, format="MP3")
             media_type = "audio/mpeg"
         else:
-            sf.write(buffer, audio, sample_rate, format="WAV", subtype="PCM_16")
+            sf.write(buffer, job.audio, job.sample_rate, format="WAV", subtype="PCM_16")
             media_type = "audio/wav"
         return Response(content=buffer.getvalue(), media_type=media_type)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Synthesis failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"Encoding failed: {exc}") from exc

@@ -50,22 +50,34 @@ describe('exportChapterAudio', () => {
   afterEach(() => vi.clearAllMocks());
 
   test('does nothing without an export folder', async () => {
-    expect(await exportChapterAudio(appService, packReader, chapter)).toBeNull();
+    expect(await exportChapterAudio(appService, packReader, chapter)).toEqual({
+      ok: false,
+      reason: 'no-folder',
+    });
     expect(files.size).toBe(0);
   });
 
   test('concatenates the chapter sections into one named file', async () => {
     setTTSExportDir('/sdcard/Audio');
-    expect(await exportChapterAudio(appService, packReader, chapter)).toBe('02 - T.mp3');
+    expect(await exportChapterAudio(appService, packReader, chapter)).toEqual({
+      ok: true,
+      name: '02 - T.mp3',
+    });
     expect(Array.from(files.get('/sdcard/Audio/02 - T.mp3')!)).toEqual([2, 2, 3, 3]);
   });
 
   test('skips when a section is not packed or the audio is WAV', async () => {
     setTTSExportDir('/sdcard/Audio');
     const missing = { readSectionPack: async (s: number) => (s === 3 ? null : new ArrayBuffer(2)) };
-    expect(await exportChapterAudio(appService, missing, chapter)).toBeNull();
+    expect(await exportChapterAudio(appService, missing, chapter)).toEqual({
+      ok: false,
+      reason: 'not-packed',
+    });
     const wav = { readSectionPack: async () => new TextEncoder().encode('RIFFxxxx').buffer as ArrayBuffer };
-    expect(await exportChapterAudio(appService, wav, chapter)).toBeNull();
+    expect(await exportChapterAudio(appService, wav, chapter)).toEqual({
+      ok: false,
+      reason: 'wav-audio',
+    });
     expect(files.size).toBe(0);
   });
 });
