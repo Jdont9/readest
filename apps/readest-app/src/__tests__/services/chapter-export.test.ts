@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
+  bookFolderName,
+  buildId3Tag,
+  buildXingFrame,
   chapterExportFileName,
   exportChapterAudio,
   sanitizeFileName,
@@ -59,11 +62,15 @@ describe('exportChapterAudio', () => {
 
   test('concatenates the chapter sections into one named file', async () => {
     setTTSExportDir('/sdcard/Audio');
-    expect(await exportChapterAudio(appService, packReader, chapter)).toEqual({
+    const book = { title: 'Silo: Part 1', author: 'Hugh Howey' };
+    expect(await exportChapterAudio(appService, packReader, chapter, book)).toEqual({
       ok: true,
-      name: '02 - T.mp3',
+      name: 'Silo Part 1/02 - T.mp3',
     });
-    expect(Array.from(files.get('/sdcard/Audio/02 - T.mp3')!)).toEqual([2, 2, 3, 3]);
+    const written = files.get('/sdcard/Audio/Silo Part 1/02 - T.mp3')!;
+    // An ID3v2.3 tag first, then the section audio in order.
+    expect(String.fromCharCode(...written.slice(0, 3))).toBe('ID3');
+    expect(Array.from(written.slice(-4))).toEqual([2, 2, 3, 3]);
   });
 
   test('skips when a section is not packed or the audio is WAV', async () => {
@@ -79,5 +86,51 @@ describe('exportChapterAudio', () => {
       reason: 'wav-audio',
     });
     expect(files.size).toBe(0);
+  });
+});
+
+describe('ID3 tag and book folder', () => {
+  test('writes a well-formed ID3v2.3 tag with UTF-16 text frames', () => {
+    const tag = buildId3Tag({ title: 'Arrivée', album: 'Silo', artist: 'Hugh Howey', track: 7, trackTotal: 53 });
+    expect(String.fromCharCode(...tag.slice(0, 3))).toBe('ID3');
+    expect(tag[3]).toBe(3);
+    const size = (tag[6]! << 21) | (tag[7]! << 14) | (tag[8]! << 7) | tag[9]!;
+    expect(size).toBe(tag.length - 10);
+    const text = new TextDecoder('utf-16le').decode(tag);
+    expect(text).toContain('7/53');
+  });
+
+  test('names the book folder safely', () => {
+    expect(bookFolderName({ title: '  Le Seigneur/des "Anneaux"  ' })).toBe('Le Seigneur des Anneaux');
+    expect(bookFolderName({})).toBe('Livre');
+  });
+});
+
+describe('Xing header', () => {
+  // MPEG-2 Layer III, 24 kHz, mono, 64 kbps => 192-byte frames of 576 samples.
+  const frame = () => {
+    const f = new Uint8Array(192);
+    f.set([0xff, 0xf3, 0x80 | (1 << 2), 0xc0]);
+    return f;
+  };
+  const audio = (frames: number) => {
+    const out = new Uint8Array(frames * 192);
+    for (let i = 0; i < frames; i++) out.set(frame(), i * 192);
+    return out;
+  };
+
+  test('records the real frame count and size', () => {
+    const xing = buildXingFrame(audio(500))!;
+    const view = new DataView(xing.buffer);
+    expect(String.fromCharCode(...xing.slice(13, 17))).toBe('Xing'); // 4 header + 9 side info
+    expect(view.getUint32(13 + 8)).toBe(500);
+    expect(view.getUint32(13 + 12)).toBe(xing.length + 500 * 192);
+  });
+
+  test('is a valid frame itself and returns null for non-MP3 data', () => {
+    const xing = buildXingFrame(audio(10))!;
+    expect(xing[0]).toBe(0xff);
+    expect((xing[1]! & 0xe0)).toBe(0xe0);
+    expect(buildXingFrame(new Uint8Array(1000))).toBeNull();
   });
 });

@@ -30,6 +30,8 @@ import { DEFAULT_PARAGRAPH_GAP_SEC } from './ttsConstants';
 import { TTSClient } from './TTSClient';
 import { startAudioKeepAlive, stopAudioKeepAlive } from './WebAudioPlayer';
 import { isValidLang } from '@/utils/lang';
+import { formatAuthors, formatTitle } from '@/utils/book';
+import type { Contributor, LanguageMap } from '@/utils/book';
 import { normalizeLyricText } from '@/utils/ttsLyrics';
 import {
   computeWordOffsets,
@@ -994,6 +996,18 @@ export class TTSController extends EventTarget {
 
   async getCacheBytes() {
     return this.#downloadableClient()?.getCacheBytes() ?? 0;
+  }
+
+  // Title/author of the book being read, for exported file tags and folder.
+  getBookInfo(): { title?: string; author?: string } {
+    const metadata = this.view?.book?.metadata as
+      | { title?: string | LanguageMap; author?: string | string[] | Contributor | Contributor[] }
+      | undefined;
+    if (!metadata) return {};
+    return {
+      title: metadata.title ? formatTitle(metadata.title) : undefined,
+      author: metadata.author ? formatAuthors(metadata.author) : undefined,
+    };
   }
 
   async readSectionPack(section: number): Promise<ArrayBuffer | null> {

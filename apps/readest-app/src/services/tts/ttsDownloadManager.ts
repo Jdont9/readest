@@ -312,7 +312,7 @@ export class TTSDownloadManager {
     const toast = (type: 'info' | 'error', message: string) =>
       eventDispatcher.dispatch('toast', { type, message });
     try {
-      const result = await exportChapterAudio(appService, controller, item);
+      const result = await exportChapterAudio(appService, controller, item, controller.getBookInfo());
       if (result.ok) {
         console.info('[TTS] chapter exported', result.name);
         toast('info', `Exporté : ${result.name}`);
