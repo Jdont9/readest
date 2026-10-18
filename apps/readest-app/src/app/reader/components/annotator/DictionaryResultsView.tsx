@@ -23,6 +23,7 @@ import {
 import type {
   DictionaryLookupOutcome,
   DictionaryProvider,
+  DictionarySelectionContext,
   WebSearchEntry,
 } from '@/services/dictionaries/types';
 import type { Insets } from '@/types/misc';
@@ -54,6 +55,8 @@ interface CardState {
 export interface UseDictionaryResultsArgs {
   word: string;
   lang?: string;
+  /** Where `word` was selected in the book, for the AI context dictionary (#5544). */
+  selection?: DictionarySelectionContext;
 }
 
 export interface DictionaryResultsState {
@@ -98,11 +101,15 @@ export interface DictionaryResultsState {
 export function useDictionaryResults({
   word,
   lang,
+  selection,
 }: UseDictionaryResultsArgs): DictionaryResultsState {
   const { appService } = useEnv();
   const { dictionaries, settings } = useCustomDictionaryStore();
   const isDarkMode = useThemeStore((s) => s.isDarkMode);
   const themeCode = useThemeStore((s) => s.themeCode);
+  // Speak the entry as soon as it renders, for dictionaries that carry their
+  // own recordings (#6265). Providers without bundled audio ignore it.
+  const autoPlayPronunciation = settings.autoPlayPronunciation ?? false;
 
   const computedProviders = getEnabledProviders({
     settings,
@@ -115,6 +122,14 @@ export function useDictionaryResults({
 
   const definitionProviders = useMemo(() => providers.filter((p) => p.kind !== 'web'), [providers]);
   const webSearchProviders = useMemo(() => providers.filter((p) => p.kind === 'web'), [providers]);
+  // Every provider looks the word up concurrently, but they all speak through
+  // one shared <audio> element — arming more than one lets whichever resolves
+  // its bytes last cut off the others, in an order nobody chose. Arm only the
+  // highest-ranked dictionary that can carry recordings (#6265).
+  const autoPlayProviderId = useMemo(
+    () => definitionProviders.find((p) => p.kind === 'mdict')?.id,
+    [definitionProviders],
+  );
   // Web entries live in their own section, so `providerOrder` alone can't lift
   // one above the dictionary cards (#5083). Let the top-most enabled provider
   // decide which section leads. Derived from the full enabled list rather than
@@ -123,6 +138,15 @@ export function useDictionaryResults({
 
   const [historyStack, setHistoryStack] = useState<string[]>([word.trim()]);
   const currentWord = historyStack[historyStack.length - 1] ?? word.trim();
+  // Compared by value: the reader republishes the same selection as a new
+  // object (e.g. after shedding native handles), which must not restart the
+  // lookups and re-send a paid AI request.
+  const selectionKey = selection ? JSON.stringify(selection) : '';
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stableSelection = useMemo(() => selection, [selectionKey]);
+  // The passage only describes the selected word, not words reached through
+  // in-popup links.
+  const currentSelection = historyStack.length === 1 ? stableSelection : undefined;
 
   // Reset the history when the host reopens with a new word from outside
   // (selection change in the reader). A double-click selection can carry
@@ -134,7 +158,9 @@ export function useDictionaryResults({
   const [cards, setCards] = useState<Record<string, CardState>>({});
   // Cards the user has manually toggled. The auto-expand reconciliation
   // (≤ 3 results → default expanded) only writes to cards NOT in this set.
-  const [manuallyToggled, setManuallyToggled] = useState<Record<string, boolean>>({});
+  // A ref, not state: a tap can land while an auto-expand pass is still
+  // pending, and that pass must see the tap or it re-expands the card.
+  const manuallyToggled = useRef<Record<string, boolean>>({});
 
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const setContainerRef = useCallback(
@@ -189,13 +215,13 @@ export function useDictionaryResults({
       if (!old) return prev;
       return { ...prev, [id]: { ...old, expanded: !old.expanded } };
     });
-    setManuallyToggled((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
+    manuallyToggled.current[id] = true;
   }, []);
 
   // Reset manual-toggle tracking when the looked-up word changes — the
   // auto-expand decision should re-evaluate against the new result count.
   useEffect(() => {
-    setManuallyToggled({});
+    manuallyToggled.current = {};
   }, [currentWord]);
 
   // Auto-expand decision: when ≤ 3 providers have settled with results,
@@ -211,7 +237,7 @@ export function useDictionaryResults({
       let changed = false;
       const next = { ...prev };
       for (const id of loadedIds) {
-        if (manuallyToggled[id]) continue;
+        if (manuallyToggled.current[id]) continue;
         const c = prev[id];
         if (!c) continue;
         if (c.expanded !== shouldExpand) {
@@ -221,7 +247,7 @@ export function useDictionaryResults({
       }
       return changed ? next : prev;
     });
-  }, [cards, manuallyToggled]);
+  }, [cards]);
 
   const [zoomedImageSrc, setZoomedImageSrc] = useState<string | null>(null);
   // Reading the image out of the entry is async, so a second tap (or a close)
@@ -309,13 +335,8 @@ export function useDictionaryResults({
           if (!container) {
             outcome = { ok: false, reason: 'error', message: 'no container' };
           } else {
-            // Try normalized query variants (trimmed, case-folded) then
-            // language-aware lemma candidates in priority order, keeping the
-            // first hit. Case-sensitive formats (mdict) otherwise miss
-            // `Hello` / `world ` style selections whose headword is stored
-            // lowercased, and dictionaries that store only base headwords
-            // (e.g. Oxford Dictionary of English) miss inflected selections
-            // like `ran` / `mice` / `analyses`.
+            // Try case/Unicode variants, lemmas, then accent-folded
+            // fallbacks across providers, keeping the first hit.
             outcome = { ok: false, reason: 'empty' };
             for (const candidate of buildLookupCandidates(currentWord, langCode)) {
               container.replaceChildren();
@@ -327,6 +348,8 @@ export function useDictionaryResults({
                 isDarkMode,
                 bg: themeCode.bg,
                 fg: themeCode.fg,
+                autoPlayPronunciation: autoPlayPronunciation && provider.id === autoPlayProviderId,
+                selection: currentSelection,
               });
               if (controller.signal.aborted) return;
               if (outcome.ok || outcome.reason !== 'empty') break;
@@ -365,6 +388,9 @@ export function useDictionaryResults({
     isDarkMode,
     themeCode.bg,
     themeCode.fg,
+    autoPlayPronunciation,
+    autoPlayProviderId,
+    currentSelection,
   ]);
 
   // Visible cards = providers that are still loading or finished with a

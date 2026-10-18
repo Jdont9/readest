@@ -1,7 +1,7 @@
 import { AppService } from '@/types/system';
 import { READEST_NODE_BASE_URL, READEST_WEB_BASE_URL } from './constants';
 import { getRuntimeConfig } from './runtimeConfig';
-import { isLinuxCefRuntime } from '@/utils/ua';
+import { getOSPlatform } from '@/utils/misc';
 
 declare global {
   interface Window {
@@ -23,15 +23,14 @@ export const getNodeBaseUrl = () =>
 
 /**
  * Whether window move/resize has to be driven from JS with pointer events.
- * Under CEF on X11 the mouse press is owned by Chromium's X connection, so the
- * runtime's `startDragging` (`_NET_WM_MOVERESIZE` from winit's connection) is
- * refused by the window manager, and the undecorated window has no native
- * resize borders either. Every other platform keeps the runtime's own drag.
+ * Linux runs on CEF, where the mouse press is owned by Chromium's X
+ * connection: the runtime's `startDragging` (`_NET_WM_MOVERESIZE` from winit's
+ * connection) is refused by the window manager, and the undecorated window has
+ * no native resize borders either. Every other platform keeps the runtime's
+ * own drag.
  */
 export const needsPointerWindowControls = () =>
-  isTauriAppPlatform() &&
-  typeof navigator !== 'undefined' &&
-  isLinuxCefRuntime(navigator.userAgent);
+  isTauriAppPlatform() && typeof navigator !== 'undefined' && getOSPlatform() === 'linux';
 
 export const isMacPlatform = () =>
   typeof window !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
@@ -44,6 +43,11 @@ const isWebDevMode = () => process.env['NODE_ENV'] === 'development' && isWebApp
 // with command `pnpm dev-web`
 // for production build or tauri app use the production Web API
 export const getAPIBaseUrl = () => (isWebDevMode() ? '/api' : `${getBaseUrl()}/api`);
+
+// Readest Voice synthesizes on the production GPU service, which a local dev
+// server cannot reach: its routes use the production Web API even under
+// `pnpm dev-web` (a self-hosted apiBaseUrl still applies).
+export const getReadestVoiceAPIBaseUrl = () => `${getBaseUrl()}/api`;
 
 // For Node.js API that currently not supported in some edge runtimes
 export const getNodeAPIBaseUrl = () => (isWebDevMode() ? '/api' : `${getNodeBaseUrl()}/api`);

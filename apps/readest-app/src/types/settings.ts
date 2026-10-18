@@ -1,3 +1,5 @@
+import type { InkTool } from '@/services/handwriting/model';
+import type { BookshelfState } from './bookshelf';
 import { CustomTheme } from '@/styles/themes';
 import { CustomFont } from '@/styles/fonts';
 import { CustomTexture } from '@/styles/textures';
@@ -5,6 +7,8 @@ import { HighlightColor, HighlightStyle, UserHighlightColor, ViewSettings } from
 import { OPDSCatalog } from './opds';
 import { WebSource } from './webSource';
 import { ABSServer } from './audiobookshelf';
+import type { CustomTranslator, TranslationPrompt } from './translation';
+import type { CustomTTSService } from './customTTS';
 import type { AISettings } from '@/services/ai/types';
 import type { NotebookTab } from '@/store/notebookStore';
 import type { DictionarySettings, ImportedDictionary } from '@/services/dictionaries/types';
@@ -21,6 +25,7 @@ export const LibrarySortByType = {
   Format: 'format',
   Published: 'published',
   Progress: 'progress',
+  Pages: 'pages',
   TimeRemaining: 'timeRemaining',
 } as const;
 
@@ -74,6 +79,14 @@ export interface ReadSettings {
   defaultHighlightLabels: Partial<Record<HighlightColor, string>>;
   customTtsHighlightColors: string[];
   customThemes: CustomTheme[];
+
+  /** Ink color and pen width for the handwriting tool, remembered per install. */
+  handwritingColor: string;
+  handwritingWidth: number;
+  /** The drawing tool last used, and the marker's own color and width. */
+  handwritingTool: InkTool;
+  handwritingMarkerColor: string;
+  handwritingMarkerWidth: number;
 }
 
 export interface KOSyncSettings {
@@ -143,11 +156,26 @@ export interface ReadwiseSettings {
 
 export interface HardcoverSettings {
   enabled: boolean;
+  /** Pasted API token; empty when signed in with OAuth. */
   accessToken: string;
+  /** Device-local OAuth session; not synced (short-lived, refresh token rotates). */
+  oauth?: { accessToken: string; refreshToken?: string; expiresAt: number };
   lastSyncedAt: number;
   // When true, progress + notes are pushed to Hardcover automatically as the
   // user reads (debounced) instead of only via the reader menu. Default OFF;
   // existing connected users (undefined) stay manual until they opt in.
+  autoSync?: boolean;
+}
+
+export interface PageboundSettings {
+  enabled: boolean;
+  /** Display only: the account the session belongs to. */
+  email: string;
+  /** Firebase refresh token; Pagebound has no API tokens or OAuth. */
+  refreshToken: string;
+  /** Pagebound's own API token, exchanged from a Firebase id token. */
+  apiToken: string;
+  lastSyncedAt: number;
   autoSync?: boolean;
 }
 
@@ -347,6 +375,8 @@ export type SyncCategory =
   | 'texture'
   | 'opds_catalog'
   | 'abs_server'
+  | 'custom_translator'
+  | 'custom_tts'
   | 'settings'
   | 'credentials'
   | 'stats';
@@ -360,6 +390,8 @@ export const SYNC_CATEGORIES: readonly SyncCategory[] = [
   'texture',
   'opds_catalog',
   'abs_server',
+  'custom_translator',
+  'custom_tts',
   'settings',
   'stats',
   'credentials',
@@ -447,6 +479,10 @@ export interface SystemSettings {
    * otherwise land twice (issue #5979).
    */
   gamepadEnabled: boolean;
+  /** Mouse wheel down turns to the previous page in paginated mode (#6439). */
+  reverseWheelPaging: boolean;
+  /** Hide the e-ink library's Previous/Next buttons; keys still page. */
+  hideBookshelfPageButtons: boolean;
   alwaysShowStatusBar: boolean;
   openLastBooks: boolean;
   lastOpenBooks: string[];
@@ -455,6 +491,7 @@ export interface SystemSettings {
   savedBookCoverForLockScreenPath: string;
   telemetryEnabled: boolean;
   discordRichPresenceEnabled: boolean;
+  bookshelves?: BookshelfState;
   libraryViewMode: LibraryViewModeType;
   librarySortBy: LibrarySortByType;
   librarySortAscending: boolean;
@@ -500,6 +537,12 @@ export interface SystemSettings {
   dictionarySettings: DictionarySettings;
   opdsCatalogs: OPDSCatalog[];
   absServers: ABSServer[];
+  /** User-configured translation backends; synced as `custom_translator`. */
+  customTranslators?: CustomTranslator[];
+  /** User translation prompts; synced as `translation_prompt`. */
+  translationPrompts?: TranslationPrompt[];
+  /** User OpenAI-compatible speech services; synced as `custom_tts`. */
+  customTTSServices?: CustomTTSService[];
   /** Saved sites for the "From Web Browser" import (#5775). Device-local. */
   webSources?: WebSource[];
   metadataSeriesCollapsed: boolean;
@@ -532,6 +575,7 @@ export interface SystemSettings {
   bookorbit: BookOrbitSettings;
   readwise: ReadwiseSettings;
   hardcover: HardcoverSettings;
+  pagebound: PageboundSettings;
   notion: NotionSettings;
   /** Optional by design — see {@link ReadestCloudSettings}. Never defaulted. */
   readestCloud?: ReadestCloudSettings;

@@ -23,12 +23,14 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { eventDispatcher } from '@/utils/event';
 import {
   filterBooknotes,
+  isAnnotationEntry,
   collectAnnotationFacets,
   summarizeAnnotationHub,
   AnnotationFilterKind,
 } from '../../utils/annotatorUtil';
 import AnnotationsToolbar from './AnnotationsToolbar';
 import BooknoteItem from './BooknoteItem';
+import { BooknoteTimeProvider } from './BooknoteTime';
 import EmptyState from '../EmptyState';
 
 type FlatBooknoteRow =
@@ -103,7 +105,7 @@ const BooknoteView: React.FC<{
   }, []);
 
   const liveAnnotations = useMemo(
-    () => allNotes.filter((note) => note.type === 'annotation' && !note.deletedAt),
+    () => allNotes.filter((note) => isAnnotationEntry(note) && !note.deletedAt),
     [allNotes],
   );
   const facets = useMemo(() => collectAnnotationFacets(liveAnnotations), [liveAnnotations]);
@@ -313,6 +315,14 @@ const BooknoteView: React.FC<{
       initialScrollHandledRef.current = false;
       return;
     }
+    // Leave the list alone when the note is already fully visible, e.g. right
+    // after clicking it; re-centering would yank the reader's place (#6423).
+    const row = scroller?.querySelector(`[data-index="${nearestIndex}"]`);
+    if (scroller && row) {
+      const rowRect = row.getBoundingClientRect();
+      const viewRect = scroller.getBoundingClientRect();
+      if (rowRect.top >= viewRect.top && rowRect.bottom <= viewRect.bottom) return;
+    }
     const isEink = document.documentElement.getAttribute('data-eink') === 'true';
     // Jump instantly for far moves (and on eink, which ghosts during a smooth
     // animation) to avoid blanking the virtualized list mid-animation; keep
@@ -331,7 +341,7 @@ const BooknoteView: React.FC<{
         });
       });
     }
-  }, [nearestCfi, nearestIndex, isFiltering]);
+  }, [nearestCfi, nearestIndex, isFiltering, scroller]);
 
   const renderItem = useCallback(
     (index: number) => {
@@ -433,21 +443,23 @@ const BooknoteView: React.FC<{
             data-overlayscrollbars-initialize=''
             style={{ height: containerHeight }}
           >
-            <Virtuoso
-              ref={virtuosoRef}
-              scrollerRef={handleScrollerRef}
-              initialTopMostItemIndex={
-                initialTopIndex > 0 ? { index: initialTopIndex, align: 'center' } : 0
-              }
-              rangeChanged={({ startIndex, endIndex }) => {
-                visibleCenterRef.current = Math.floor((startIndex + endIndex) / 2);
-              }}
-              style={{ height: containerHeight }}
-              totalCount={flatItems.length}
-              computeItemKey={(index) => flatItems[index]?.key ?? index}
-              itemContent={renderItem}
-              overscan={500}
-            />
+            <BooknoteTimeProvider>
+              <Virtuoso
+                ref={virtuosoRef}
+                scrollerRef={handleScrollerRef}
+                initialTopMostItemIndex={
+                  initialTopIndex > 0 ? { index: initialTopIndex, align: 'center' } : 0
+                }
+                rangeChanged={({ startIndex, endIndex }) => {
+                  visibleCenterRef.current = Math.floor((startIndex + endIndex) / 2);
+                }}
+                style={{ height: containerHeight }}
+                totalCount={flatItems.length}
+                computeItemKey={(index) => flatItems[index]?.key ?? index}
+                itemContent={renderItem}
+                overscan={500}
+              />
+            </BooknoteTimeProvider>
           </div>
         )}
       </div>

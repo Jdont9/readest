@@ -1,3 +1,4 @@
+import type { InkStroke } from '@/services/handwriting/model';
 import { BookMetadata } from '@/libs/document';
 import { TTSHighlightOptions } from '@/services/tts/types';
 import { TTSHighlightGranularity } from '@/services/tts/types';
@@ -17,9 +18,14 @@ export type BookFormat =
   | 'FBZ'
   | 'TXT'
   | 'MD'
+  | 'HTML'
   // Streaming audiobook from an Audiobookshelf server; filePath is abs://<serverId>/<itemId>
-  | 'ABS';
-export type BookNoteType = 'bookmark' | 'annotation' | 'excerpt' | 'notebook';
+  | 'ABS'
+  // Streaming audiobook from an OPDS catalog; filePath is opdsaudio://<encoded entry> (#6224)
+  | 'OPDSAUDIO'
+  // Streaming audiobook from BookOrbit's audiobook API; filePath is bookorbit://<bookId> (#6224)
+  | 'BOOKORBIT';
+export type BookNoteType = 'bookmark' | 'annotation' | 'excerpt' | 'notebook' | 'ink';
 export type ReadingStatus = 'unread' | 'reading' | 'finished' | 'abandoned';
 export type HighlightStyle = 'highlight' | 'underline' | 'squiggly';
 // Predefined highlight colors, can be extended with custom hex colors
@@ -146,7 +152,7 @@ export interface Book {
   syncedAt?: number | null;
 
   lastUpdated?: number; // deprecated in favor of updatedAt
-  progress?: [number, number]; // Add progress field: [current, total], 1-based page number
+  progress?: [number, number] | null; // Add progress field: [current, total], 1-based page number
   readingStatus?: ReadingStatus;
   readingStatusUpdatedAt?: number; // ms; bumped only when readingStatus changes
   primaryLanguage?: string;
@@ -154,6 +160,10 @@ export interface Book {
   // library can badge it without opening the file. Derived from the file on
   // every import, like `format` — not user data, so it needs no LWW timestamp.
   hasNarration?: boolean;
+  // The page total the reader will lay out, counted from the file at import so
+  // an unopened book can show and sort by it (#6662). Like `hasNarration`, it is
+  // re-derived on every import; once opened, `progress[1]` holds the same total.
+  pageCount?: number;
   duration?: number; // total audio length in seconds (ABS audiobooks)
   // Marks this ABS stub as a podcast show or ebook rather than an audiobook.
   // Audio books remain unmarked (absMediaType undefined).
@@ -162,6 +172,10 @@ export interface Book {
   // episode-count badge and lets reconcileAbsBooks detect a new episode as a
   // change even though title/author/duration are otherwise unchanged.
   episodeCount?: number;
+  // When this device finished downloading an ABS stub's media for offline use
+  // (audio tracks, or an ebook-only item's file). Device-local like
+  // `downloadedAt`: the files exist only here, so it never syncs.
+  absDownloadedAt?: number | null;
 
   metadata?: BookMetadata;
   // Field-level LWW timestamp for the metadata group (title, author, tags,
@@ -208,6 +222,12 @@ export interface BookNote {
    * bookmarks and excerpts, and for fixed-layout formats (e.g. PDF).
    */
   global?: boolean;
+  /**
+   * Handwriting of an `ink` note: strokes pinned to the content at `cfi` (a
+   * reflowable book) or drawn on the page at `cfi` (fixed layout). See
+   * services/handwriting.
+   */
+  ink?: InkStroke[];
 
   createdAt: number;
   updatedAt: number;
@@ -235,6 +255,9 @@ export interface BookLayout {
   compactMarginRightPx: number;
   compactMarginPx?: number; // deprecated
   gapPercent: number;
+  /* Centre gap of a two-column spread in px; 0 derives it from the margins
+     and gapPercent as before. */
+  columnGapPx: number;
   scrolled: boolean;
   scrolledDirection: 'vertical' | 'horizontal';
   webtoonMode: boolean;
@@ -244,6 +267,7 @@ export interface BookLayout {
   noContinuousScroll: boolean;
   disableClick: boolean;
   disableSwipe: boolean;
+  disablePullDownToBookmark: boolean;
   fullscreenClickArea: boolean;
   swapClickArea: boolean;
   disableDoubleClick: boolean;
@@ -281,6 +305,12 @@ export interface BookStyle {
   highlightOpacity: number;
   codeHighlighting: boolean;
   codeLanguage: string;
+  dialogueHighlight: boolean;
+  dialogueHighlightCustomColor: boolean;
+  dialogueHighlightColor: string;
+  dialogueHighlightCustomTextColor: boolean;
+  dialogueHighlightTextColor: string;
+  dialogueHighlightItalic: boolean;
   userStylesheet: string;
   userUIStylesheet: string;
 
@@ -332,6 +362,7 @@ export interface ViewConfig {
   sideBarTab: string;
   uiLanguage: string;
   sortedTOC: boolean;
+  showTOCThumbnails: boolean;
 
   doubleBorder: boolean;
   borderColor: string;
@@ -371,6 +402,12 @@ export interface ViewConfig {
   pageTurnStyle: PageTurnStyle;
   isEink: boolean;
   isColorEink: boolean;
+  /**
+   * Number of page turns between automatic deep full refreshes in e-ink mode.
+   * 0 disables it. Manual refresh bindings are unusable on readers with no
+   * spare buttons, so this clears accumulated ghosting on its own.
+   */
+  einkAutoRefreshInterval: number;
 
   paragraphMode: ParagraphModeConfig;
 
@@ -398,15 +435,30 @@ export interface TTSConfig {
   ttsMediaMetadata: TTSMediaMetadataMode;
   ttsPlayerStyle: TTSPlayerStyle;
   ttsSkipInlineAnnotations: boolean;
+  // Sentence-by-sentence Read Aloud: pause after every sentence (#5233).
+  ttsPauseAfterSentence: boolean;
 }
 
 export interface TranslatorConfig {
+  translateSourceLang?: string;
   translationEnabled: boolean;
   translationProvider: string;
+  /** Prompt library entry for LLM translators; `'default'` or a prompt id. */
+  translationPromptId?: string;
   translateTargetLang: string;
   showTranslateSource: boolean;
   ttsReadAloudText: string;
+  /** Translated text font: '' follows the book, else the reader's serif/sans/mono font. */
+  translationFont: TranslationFont;
+  translationFontStyle: TranslationFontStyle;
+  /** Translated text size relative to the paragraph, in em. */
+  translationFontSize: number;
+  /** Translated text color as a hex string; '' follows the book. */
+  translationColor: string;
 }
+
+export type TranslationFont = '' | 'serif' | 'sans-serif' | 'monospace';
+export type TranslationFontStyle = 'normal' | 'italic' | 'bold' | 'bold-italic';
 
 // Markdown and plain text render the note template; JSON emits the
 // machine-readable file that Readest itself can import back (#5400).
@@ -421,6 +473,8 @@ export interface NoteExportConfig {
   includeCoverImage: boolean;
   includeChapterTitles: boolean;
   includeQuotes: boolean;
+  // The sentence around each highlight, read from the book at export time.
+  includeContext: boolean;
   includeNotes: boolean;
   includePageNumber: boolean;
   includeTimestamp: boolean;
@@ -443,6 +497,9 @@ export interface NoteExportConfig {
 export interface AnnotatorConfig {
   enableAnnotationQuickActions: boolean;
   annotationQuickAction: AnnotationToolType | null;
+  // Hand the word back selected, with the toolbar, when an instant dictionary
+  // lookup closes (#6213). Off: closing it returns straight to reading (#6454).
+  keepSelectionAfterLookup: boolean;
   annotationToolbarItems: AnnotationToolType[];
   copyToNotebook: boolean;
   noteExportConfig: NoteExportConfig;
@@ -609,6 +666,13 @@ export interface HardcoverBookLink {
   title: string;
 }
 
+/** The Pagebound book this file syncs to; device-local like `hardcover`. */
+export interface PageboundBookLink {
+  bookId: number;
+  uuid: string;
+  title: string;
+}
+
 export interface BookConfig {
   schemaVersion?: number;
   bookHash?: string;
@@ -629,6 +693,20 @@ export interface BookConfig {
    */
   audiobook?: PairedAudiobook;
   hardcover?: HardcoverBookLink;
+  pagebound?: PageboundBookLink;
+  /**
+   * The pages of a comic laid out as spreads of their own (wide images), by
+   * page path: a device-local cache of measuring them, so a later open skips
+   * it and a streamed comic keeps what earlier reading found. Neither sync
+   * carries it; both copy an explicit list of fields.
+   */
+  widePages?: string[];
+  /**
+   * Where a zoomed fixed-layout page was panned under the horizontal pan lock,
+   * as a fraction of its horizontal overflow, restored on reopen. Device-local
+   * like widePages: it depends on this screen's zoom and size.
+   */
+  panX?: number;
 
   lastSyncedAtConfig?: number;
   lastSyncedAtNotes?: number;
@@ -678,6 +756,23 @@ export interface PairedAudiobookAbsSource {
   }[];
 }
 
+/**
+ * An audiobook streamed from a BookOrbit server. One BookOrbit book owns both
+ * the ebook and the audio, so the pairing needs only that book's id; the
+ * virtual file is `bookorbit://<bookId>` and the tracks map its global
+ * timeline onto the server's assets, exactly as the ABS variant does.
+ */
+export interface PairedAudiobookBookOrbitSource {
+  kind: 'bookorbit';
+  bookId: number;
+  tracks: {
+    index: number;
+    startOffset: number; // global seconds
+    duration: number; // seconds
+    contentUrl: string; // server-relative
+  }[];
+}
+
 export interface PairedAudiobook {
   version: 1;
   title?: string;
@@ -686,7 +781,7 @@ export interface PairedAudiobook {
   chapters: AudiobookChapter[];
   mappings: AudiobookChapterMapping[];
   createdAt: number;
-  source?: PairedAudiobookAbsSource;
+  source?: PairedAudiobookAbsSource | PairedAudiobookBookOrbitSource;
 }
 
 export interface BookDataRecord {

@@ -15,10 +15,29 @@ export interface AudiobookClock {
   destroy(): void;
 }
 
+/**
+ * The `crossOrigin` a media element needs to load a URL. The web app is
+ * cross-origin isolated (COEP: require-corp, see middleware.ts), which blocks
+ * media from another origin unless the element requests it with CORS. The
+ * desktop and mobile apps are not isolated and keep the default request mode.
+ *
+ * The platform check is an inline of isWebAppPlatform(): importing
+ * @/services/environment here pulls the app-service graph into the TTS
+ * controller's unit tests (MediaOverlayClient precedent).
+ */
+export const mediaCrossOrigin = (url: string): 'anonymous' | null => {
+  if (process.env['NEXT_PUBLIC_APP_PLATFORM'] !== 'web') return null;
+  const { protocol, origin } = new URL(url, globalThis.location.href);
+  return /^https?:$/.test(protocol) && origin !== globalThis.location.origin ? 'anonymous' : null;
+};
+
 export class HtmlAudioClock implements AudiobookClock {
   #audio: HTMLAudioElement;
+  #cors: boolean;
 
-  constructor() {
+  /** `cors: false` keeps every track in the default request mode (OPDS catalogs). */
+  constructor({ cors = true }: { cors?: boolean } = {}) {
+    this.#cors = cors;
     this.#audio = new Audio();
     this.#audio.preload = 'auto';
     // Speed changes must not raise the narrator's pitch (MediaOverlayClient precedent).
@@ -47,6 +66,7 @@ export class HtmlAudioClock implements AudiobookClock {
 
   async load(url: string, startAt: number): Promise<void> {
     const rate = this.#audio.playbackRate;
+    this.#audio.crossOrigin = this.#cors ? mediaCrossOrigin(url) : null;
     this.#audio.src = url;
     this.#audio.load();
     this.#audio.playbackRate = rate; // src reset clears rate on some engines
@@ -73,5 +93,50 @@ export class HtmlAudioClock implements AudiobookClock {
     this.#audio.pause();
     this.#audio.removeAttribute('src');
     this.#audio.load();
+  }
+}
+
+/**
+ * Plays downloaded tracks (#6256) from blob URLs, taking file paths in load().
+ * Chromium under CEF (the Linux runtime) fails every non-zero `Range` read of
+ * a custom-scheme URL (Chromium 40739128), so an asset:// track cannot seek
+ * there; a blob URL can. The current track's blob is reused for seeks within
+ * it and released when the track changes or the clock is destroyed.
+ */
+export class BlobAudioClock extends HtmlAudioClock {
+  #loadBlob: (path: string) => Promise<Blob>;
+  #path: string | null = null;
+  #url: string | null = null;
+  #loadSeq = 0;
+
+  constructor(loadBlob: (path: string) => Promise<Blob>) {
+    super();
+    this.#loadBlob = loadBlob;
+  }
+
+  override async load(path: string, startAt: number): Promise<void> {
+    const seq = ++this.#loadSeq;
+    if (path !== this.#path || !this.#url) {
+      const blob = await this.#loadBlob(path);
+      // A newer load (a quick skip) already took over.
+      if (seq !== this.#loadSeq) return;
+      this.#release();
+      this.#path = path;
+      this.#url = URL.createObjectURL(blob);
+    }
+    await super.load(this.#url, startAt);
+  }
+
+  override destroy(): void {
+    // A load still reading its blob must not resurrect the clock.
+    this.#loadSeq++;
+    super.destroy();
+    this.#release();
+  }
+
+  #release(): void {
+    if (this.#url) URL.revokeObjectURL(this.#url);
+    this.#path = null;
+    this.#url = null;
   }
 }

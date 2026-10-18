@@ -28,8 +28,15 @@ vi.mock('@/hooks/useTranslation', () => ({
   useTranslation: () => (s: string) => s,
 }));
 
+vi.mock('@/context/EnvContext', () => ({ useEnv: () => ({ envConfig: {} }) }));
+vi.mock('@/store/readerStore', () => ({
+  useReaderStore: () => ({ getViewSettings: () => ({}) }),
+}));
+vi.mock('@/helpers/settings', () => ({ saveViewSettings: vi.fn() }));
+
 vi.mock('@/context/AuthContext', () => ({
-  useAuth: () => ({ token: 'test-token' }),
+  // An unsigned JWT of a free plan: the premium check decodes the token.
+  useAuth: () => ({ token: 'eyJhbGciOiJub25lIn0.eyJwbGFuIjoiZnJlZSJ9.sig' }),
 }));
 
 vi.mock('@/store/settingsStore', () => ({
@@ -77,6 +84,7 @@ afterEach(() => cleanup());
 const renderPopup = () =>
   render(
     <TranslatorPopup
+      bookKey='book-1'
       text={LONG_SOURCE}
       // Attached low on a short viewport, so the popup is height-capped hard.
       position={{ dir: 'down', point: { x: 20, y: 390 } }}

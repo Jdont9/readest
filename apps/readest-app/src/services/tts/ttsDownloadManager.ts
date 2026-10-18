@@ -15,11 +15,16 @@ import { useTTSDownloadStore } from '@/store/ttsDownloadStore';
 import type { DownloadChapter } from './downloadChapters';
 import { eventDispatcher } from '@/utils/event';
 import { exportChapterAudio } from './chapterExport';
+import { SpeechSynthesisFatalError } from './providers/types';
 import type { TTSController } from './TTSController';
 import type { SectionDownloadProgress } from './TTSDownloader';
 
 const QUEUE_KEY = 'readest_tts_download_queue';
 const QUEUE_SCHEMA_VERSION = 1;
+// A failed run (offline, server hiccup) runs again on its own, after 10, 20
+// and 30 s; each run only synthesizes what is still missing.
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 10_000;
 
 interface PersistedQueueData {
   schemaVersion?: number;
@@ -43,6 +48,11 @@ export class TTSDownloadManager {
   #controllers = new Map<string, () => TTSController | null>();
   #activeDownloads = new Map<string, ActiveDownload>();
   #unsettledDownloads = new Map<string, Set<ActiveDownload>>();
+  // Bumped by restartBook: a run that started reading statuses under an
+  // older voice starts over instead of acting on them.
+  #voiceGenerations = new Map<string, number>();
+  // Items waiting out their retry delay.
+  #retryWaits = new Map<string, ReturnType<typeof setTimeout>>();
   #isProcessing = false;
   #loaded = false;
 
@@ -77,6 +87,24 @@ export class TTSDownloadManager {
     return true;
   }
 
+  // The voice changed: audio is cached per voice, so a running download of
+  // the book starts over with the new one. Cancelling the old run withdraws
+  // what it still had pending (its jobs are cancelled).
+  restartBook(bookHash: string): void {
+    this.#ensureLoaded();
+    this.#voiceGenerations.set(bookHash, (this.#voiceGenerations.get(bookHash) ?? 0) + 1);
+    const store = useTTSDownloadStore.getState();
+    for (const active of [...this.#activeDownloads.values()]) {
+      if (active.bookHash !== bookHash) continue;
+      active.abortController.abort();
+      this.#activeDownloads.delete(active.id);
+      void this.#cancelActive(active);
+      store.requeue(active.id);
+    }
+    this.persist();
+    void this.processQueue();
+  }
+
   queueAll(bookHash: string, chapters: DownloadChapter[]): void {
     this.#ensureLoaded();
     // 'Download all' batches run ahead of individually tapped chapters.
@@ -100,6 +128,7 @@ export class TTSDownloadManager {
     // attempt inert, even if the same deterministic row ID is queued again.
     this.#activeDownloads.delete(id);
     if (active) void this.#cancelActive(active);
+    this.#clearRetryWait(id);
     useTTSDownloadStore.getState().removeItem(id);
     this.persist();
   }
@@ -118,6 +147,7 @@ export class TTSDownloadManager {
       void this.#cancelActive(active);
     }
     for (const item of store.itemsForBook(bookHash)) {
+      this.#clearRetryWait(item.id);
       store.removeItem(item.id);
     }
     this.persist();
@@ -149,6 +179,7 @@ export class TTSDownloadManager {
       .filter(
         (item) =>
           item.status === 'pending' &&
+          !this.#retryWaits.has(item.id) &&
           !parkedBooks.has(item.bookHash) &&
           this.#controllers.has(item.bookHash),
       )
@@ -169,7 +200,11 @@ export class TTSDownloadManager {
     try {
       // Read section statuses fresh so restored rows and stale closures never
       // re-download a section that packed while the item sat in the queue.
+      const generation = this.#voiceGenerations.get(item.bookHash) ?? 0;
       const statuses = await controller.getSectionCacheStatuses();
+      // The voice changed meanwhile: these statuses (and this downloader)
+      // are the old voice's. The item stays pending and runs again.
+      if ((this.#voiceGenerations.get(item.bookHash) ?? 0) !== generation) return true;
       // Cancellation can land while SQLite is reading the statuses. The row
       // object is attempt identity until setInProgress replaces it; never
       // start synthesis for a row that disappeared or was requeued meanwhile.
@@ -219,7 +254,7 @@ export class TTSDownloadManager {
       const finish = (error?: string) => {
         if (!isCurrent()) return;
         this.#activeDownloads.delete(item.id);
-        if (error) store.setFailed(item.id, error);
+        if (error) this.#fail(item.id, error, true);
         else store.removeItem(item.id);
         this.persist();
       };
@@ -286,10 +321,10 @@ export class TTSDownloadManager {
         await this.#cancelActive(active);
         if (this.#activeDownloads.get(item.id) !== active) return true;
         this.#activeDownloads.delete(item.id);
-        store.setFailed(item.id, err instanceof Error ? err.message : String(err));
+        this.#failWith(item.id, err);
         this.persist();
       } else if (useTTSDownloadStore.getState().items[item.id] === current) {
-        store.setFailed(item.id, err instanceof Error ? err.message : String(err));
+        this.#failWith(item.id, err);
         this.persist();
       }
     } finally {
@@ -330,6 +365,35 @@ export class TTSDownloadManager {
       console.warn('[TTS] chapter export failed', item.id, err);
       toast('error', `Échec de l'export : ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  #failWith(id: string, err: unknown): void {
+    // A fatal failure (quota) would only fail again.
+    const retryable = !(err instanceof SpeechSynthesisFatalError);
+    this.#fail(id, err instanceof Error ? err.message : String(err), retryable);
+  }
+
+  #fail(id: string, error: string, retryable: boolean): void {
+    const store = useTTSDownloadStore.getState();
+    const retries = store.items[id]?.retries ?? 0;
+    if (!retryable || retries >= MAX_RETRIES) {
+      store.setFailed(id, error);
+      return;
+    }
+    store.setRetrying(id);
+    const wait = setTimeout(
+      () => {
+        this.#retryWaits.delete(id);
+        void this.processQueue();
+      },
+      RETRY_DELAY_MS * (retries + 1),
+    );
+    this.#retryWaits.set(id, wait);
+  }
+
+  #clearRetryWait(id: string): void {
+    clearTimeout(this.#retryWaits.get(id));
+    this.#retryWaits.delete(id);
   }
 
   #cancelActive(active: ActiveDownload): Promise<void> {

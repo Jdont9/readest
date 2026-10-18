@@ -4,6 +4,7 @@ import { useEnv } from '@/context/EnvContext';
 import { useSync } from '@/hooks/useSync';
 import { BookConfig, FIXED_LAYOUT_FORMATS } from '@/types/book';
 import { useBookDataStore } from '@/store/bookDataStore';
+import { useLibraryStore } from '@/store/libraryStore';
 import { useReaderStore } from '@/store/readerStore';
 import { getBookProgress, useBookProgress } from '@/store/readerProgressStore';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -17,6 +18,7 @@ import { eventDispatcher } from '@/utils/event';
 import { DEFAULT_BOOK_SEARCH_CONFIG, SYNC_PROGRESS_INTERVAL_SEC } from '@/services/constants';
 import { getCFIFromXPointer, getXPointerFromCFI } from '@/utils/xcfi';
 import { isMalformedLocationCfi } from '@/utils/cfi';
+import { useWindowActiveChanged } from './useWindowActiveChanged';
 
 // Backoff schedule for the first-pull retry on book open. After these
 // attempts the gate releases unconditionally so the user's progress can
@@ -66,6 +68,7 @@ export const useProgressSync = (bookKey: string) => {
   const hasPulledConfigOnce = useRef(false);
   const pullAttempt = useRef(0);
   const pullInFlight = useRef(false);
+  const pendingResumePull = useRef(false);
   const pullRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearPendingPullRetry = () => {
@@ -102,6 +105,16 @@ export const useProgressSync = (bookKey: string) => {
     await syncConfigs([], bookHash, metaHash, 'pull');
   };
 
+  const runPendingResumePull = () => {
+    // Wait for both the request and its React-delivered result so the old
+    // response cannot close the new pull's gate.
+    if (!pendingResumePull.current || pullInFlight.current || !configPulled.current) return false;
+    configPulled.current = false;
+    clearPendingPullRetry();
+    void pullWithRetry();
+    return true;
+  };
+
   // Drives the pull on book open. A successful pull is signalled by the
   // [syncedConfigs] effect below flipping `configPulled.current` to true and
   // clearing the retry state — so this function just kicks off the next
@@ -113,12 +126,14 @@ export const useProgressSync = (bookKey: string) => {
     if (configPulled.current) return;
     if (pullInFlight.current) return;
     if (pullRetryTimer.current !== null) return;
+    pendingResumePull.current = false;
     pullInFlight.current = true;
     try {
       await pullConfig(bookKey);
     } finally {
       pullInFlight.current = false;
     }
+    if (runPendingResumePull()) return;
     if (configPulled.current) return;
     if (pullAttempt.current >= PULL_RETRY_DELAYS_MS.length) {
       // Best-effort release. The server-side last-writer-wins compare still
@@ -192,6 +207,22 @@ export const useProgressSync = (bookKey: string) => {
     }
   };
 
+  useWindowActiveChanged((isActive) => {
+    if (!user || !progress) return;
+    if (!isActive) {
+      handleAutoSync.flush();
+      return;
+    }
+    // The book stays mounted while Android is backgrounded. Pull again on
+    // resume before a suspended auto-push can send the old local position.
+    handleAutoSync.cancel();
+    pendingResumePull.current = pullInFlight.current;
+    configPulled.current = false;
+    pullAttempt.current = 0;
+    clearPendingPullRetry();
+    void pullWithRetry();
+  });
+
   // Push: flush the pending push + pull when the book is closed or the user
   // taps the manual Sync button.
   useEffect(() => {
@@ -220,7 +251,10 @@ export const useProgressSync = (bookKey: string) => {
   // Clean up any pending retry timer on unmount so it doesn't fire after the
   // reader has been torn down.
   useEffect(() => {
-    return () => clearPendingPullRetry();
+    return () => {
+      pendingResumePull.current = false;
+      clearPendingPullRetry();
+    };
   }, []);
 
   const applyRemoteProgress = async (syncedConfigs: BookConfig[]) => {
@@ -240,7 +274,16 @@ export const useProgressSync = (bookKey: string) => {
     // sibling may contribute only its reading FRACTION, forward-only. Picking
     // the first match blindly is what let a stale/cross-file config move the
     // reader backward.
-    const matches = syncedConfigs.filter((c) => c.bookHash === bookHash || c.metaHash === metaHash);
+    // A deleted book's cloud config outlives it (only a purge clears it, so a
+    // re-download of the same file resumes), but importing another copy starts
+    // fresh (mergeBooks skips deleted duplicates). As a sibling it would pull
+    // that copy forward to the deleted one's position on every open.
+    const { getBookByHash } = useLibraryStore.getState();
+    const matches = syncedConfigs.filter(
+      (c) =>
+        c.bookHash === bookHash ||
+        (c.metaHash === metaHash && !(c.bookHash && getBookByHash(c.bookHash)?.deletedAt)),
+    );
     // Base config for the device-agnostic viewSettings merge below (proofread
     // rules, reference page count). Prefer the exact same-file config.
     const syncedConfig = matches.find((c) => c.bookHash === bookHash) ?? matches[0];
@@ -411,6 +454,7 @@ export const useProgressSync = (bookKey: string) => {
       applyRemoteProgress(syncedConfigs).catch((error) => {
         console.error('Failed to apply remote progress', error);
       });
+      runPendingResumePull();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncedConfigs]);

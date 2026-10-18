@@ -106,6 +106,16 @@ export const absFetch = (url: string, init: ABSRequestOptions = {}): Promise<Res
   });
 };
 
+/** Fields accepted by PATCH /api/me/progress/:libraryItemId; ABS merges what is sent. */
+export interface ABSProgressPatch {
+  currentTime?: number;
+  duration?: number;
+  progress?: number;
+  /** Null clears a previously stored position; an omitted field leaves it as it was. */
+  ebookLocation?: string | null;
+  ebookProgress?: number;
+}
+
 type ABSTokenPatch = Pick<ABSServer, 'accessToken' | 'refreshToken' | 'serverVersion'>;
 
 /** Shape of the `user` object Audiobookshelf returns from /login and /auth/refresh. */
@@ -136,8 +146,9 @@ interface ABSRefreshResponse {
  * owning its own copy of that logic. On the web platform, API calls hit
  * the ABS server directly and rely on its opt-in CORS support (the
  * `ALLOW_CORS=1` env var or the `allowedOrigins` server setting must
- * cover the Readest web origin). Media and cover URLs are also direct —
- * `<audio>`/`<img>` element fetches aren't subject to CORS anyway.
+ * cover the Readest web origin). Media and cover URLs are also direct.
+ * Audio relies on the same setting: the web app is cross-origin isolated,
+ * so the media element requests a track with CORS (see `mediaCrossOrigin`).
  * Media URLs are built by `openAudiobook`'s
  * `resolveUrl` closure (it re-reads the store's live access token on every
  * track load, which a client-captured copy could not do); the client only
@@ -349,10 +360,13 @@ export class ABSClient {
     });
   }
 
-  async patchProgress(
-    libraryItemId: string,
-    payload: { currentTime: number; duration: number; progress: number },
-  ): Promise<void> {
+  /**
+   * Update the user's progress record for an item. Audio callers send
+   * `currentTime`/`duration`/`progress`; the ebook reader sends
+   * `ebookLocation`/`ebookProgress` (see services/audiobookshelf/ebookProgress.ts),
+   * and ABS merges whichever fields are present into the existing record.
+   */
+  async patchProgress(libraryItemId: string, payload: ABSProgressPatch): Promise<void> {
     await this.#request<void>(`/api/me/progress/${libraryItemId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

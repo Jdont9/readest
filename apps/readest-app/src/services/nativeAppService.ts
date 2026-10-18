@@ -271,6 +271,16 @@ const getPathResolver = ({
         };
       case 'Temp':
       default:
+        // Older Android versions resolve Temp to the unwritable /data/local/tmp;
+        // newer ones resolve it to the app cache, so use the app cache everywhere.
+        if (OS_TYPE === 'android') {
+          return {
+            baseDir: BaseDirectory.AppCache,
+            basePrefix: appCacheDir,
+            fp: path,
+            base,
+          };
+        }
         return {
           baseDir: BaseDirectory.Temp,
           basePrefix: tempDir,
@@ -327,10 +337,10 @@ export const nativeFileSystem: FileSystem = {
       }
     } else if (isFileURI(path)) {
       return await new NativeFile(fp, fname, baseDir ? baseDir : null).open();
-    } else if (needsQueryRangeReads(OS_TYPE, navigator.userAgent)) {
-      // Android and the Linux CEF build can't use the asset protocol for
-      // ranged reads — Chromium re-applies a `Range` header's offset to
-      // intercepted bodies and fails non-zero-start reads (Chromium 40739128).
+    } else if (needsQueryRangeReads(OS_TYPE)) {
+      // Android and Linux can't use the asset protocol for ranged reads —
+      // Chromium re-applies a `Range` header's offset to intercepted bodies
+      // and fails non-zero-start reads (Chromium 40739128).
       // Instead route reads through the `rangefile` custom scheme, which
       // carries the range in the URL query (no `Range` header) so the WebView
       // delivers the bytes verbatim, still over the network stack rather than
@@ -604,13 +614,11 @@ export class NativeAppService extends BaseAppService {
   // Files Access. Apple offers no equivalent, so App Store builds stay gated.
   override canReadExternalDir = DIST_CHANNEL !== 'appstore';
   override supportsCoverThumbnailOptimization = true;
-  override supportsCanvasContext2DFilter =
-    OS_TYPE !== 'ios' && OS_TYPE !== 'macos' && OS_TYPE !== 'linux';
-  // WebKitGTK on Linux crashes when a View Transition snapshots the window,
-  // so both capabilities are unavailable there regardless of what the engine
-  // reports; every other webview is gated on the real feature probe.
-  override supportsViewTransitionsAPI = OS_TYPE !== 'linux' && detectViewTransitionsAPI();
-  override supportsViewTransitionGroup = OS_TYPE !== 'linux' && detectViewTransitionGroup();
+  // WKWebView ignores `CanvasRenderingContext2D.filter`, so the Apple
+  // platforms stay gated; Windows, Android and Linux are all Chromium.
+  override supportsCanvasContext2DFilter = OS_TYPE !== 'ios' && OS_TYPE !== 'macos';
+  override supportsViewTransitionsAPI = detectViewTransitionsAPI();
+  override supportsViewTransitionGroup = detectViewTransitionGroup();
   override distChannel = DIST_CHANNEL;
   override storefrontRegionCode: string | null = null;
   override isOnlineCatalogsAccessible = true;
@@ -911,6 +919,17 @@ export class NativeAppService extends BaseAppService {
           } else if (content) {
             await writeFile(shareablePath, new Uint8Array(content));
           }
+        }
+        if (this.isIOSApp) {
+          // An "Open with" book keeps its already-decoded `file://` URI as its path.
+          shareablePath = shareablePath.replace(/^file:\/\//, '');
+          // The iOS plugin copies the file to `<tmp>/<name>` and keeps any copy
+          // already there, which would share a previous export of the same name.
+          const pluginCopy = await this.resolveFilePath(getFilename(shareablePath), 'Temp');
+          if (pluginCopy !== shareablePath) await remove(pluginCopy).catch(() => {});
+          // It also parses the path with `URL(string:)`, which on iOS 16 fails
+          // on a space or non-ASCII character, so hand it an encoded file URL.
+          shareablePath = `file://${shareablePath.split('/').map(encodeURIComponent).join('/')}`;
         }
         try {
           await shareFile(shareablePath, {

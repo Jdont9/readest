@@ -50,7 +50,8 @@ describe('TTSDownloader concurrency', () => {
     );
     expect(maxInflight()).toBe(4);
     expect(result).toEqual({ completed: [0], skipped: [], synthesized: 10 });
-    expect(done).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    // An initial {done: 0} report announces the total, then one per sentence.
+    expect(done).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
   test('stops launching sentences once aborted', async () => {

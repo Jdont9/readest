@@ -12,6 +12,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useParallelViewStore } from '@/store/parallelViewStore';
 import { isWebAppPlatform } from '@/services/environment';
 import { eventDispatcher } from '@/utils/event';
+import { canPairAudiobook } from '@/utils/audiobook';
 import { FIXED_LAYOUT_FORMATS } from '@/types/book';
 import { DOWNLOAD_READEST_URL } from '@/services/constants';
 import { saveViewSettings } from '@/helpers/settings';
@@ -38,10 +39,8 @@ const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen })
   const { parallelViews, setParallel, unsetParallel } = useParallelViewStore();
   const viewSettings = getViewSettings(sideBarBookKey!);
   const bookData = sideBarBookKey ? getBookData(sideBarBookKey) : null;
-  const canPairAudiobook =
-    bookData?.book?.format === 'EPUB' &&
-    bookData.bookDoc?.rendition?.layout !== 'pre-paginated' &&
-    !!bookData.bookDoc?.toc?.length;
+  const showPairAudiobook = canPairAudiobook(bookData);
+  const showTOCThumbnails = viewSettings?.showTOCThumbnails ?? true;
 
   const [isSortedTOC, setIsSortedTOC] = React.useState(viewSettings?.sortedTOC || false);
 
@@ -91,6 +90,19 @@ const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen })
       );
     }
   };
+  const handleToggleTOCThumbnails = () => {
+    setIsDropdownOpen?.(false);
+    if (sideBarBookKey) {
+      saveViewSettings(
+        envConfig,
+        sideBarBookKey,
+        'showTOCThumbnails',
+        !showTOCThumbnails,
+        true,
+        false,
+      );
+    }
+  };
   const handleSetParallel = () => {
     setParallel(bookKeys);
     setIsDropdownOpen?.(false);
@@ -136,6 +148,16 @@ const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen })
     setIsDropdownOpen?.(false);
   };
   const hardcoverLink = sideBarBookKey ? getConfig(sideBarBookKey)?.hardcover : undefined;
+  const handlePushPageboundProgress = () => {
+    eventDispatcher.dispatch('pagebound-push-progress', { bookKey: sideBarBookKey });
+    setIsDropdownOpen?.(false);
+  };
+  const handleLinkPageboundBook = () => {
+    eventDispatcher.dispatch('pagebound-link-book', { bookKey: sideBarBookKey });
+    setIsDropdownOpen?.(false);
+  };
+  const pageboundLink = sideBarBookKey ? getConfig(sideBarBookKey)?.pagebound : undefined;
+  const pageboundEnabled = !!(settings.pagebound?.enabled && settings.pagebound.refreshToken);
   const bookOrbitProgressSync = settings.bookorbit.enabled && settings.bookorbit.syncProgress;
   // Routed through Annotator (per-book, long-lived) so that the
   // confirmation dialog isn't unmounted with the dropdown menu.
@@ -196,6 +218,7 @@ const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen })
         bookOrbitProgressSync ||
         settings.readwise.enabled ||
         settings.hardcover.enabled ||
+        pageboundEnabled ||
         (settings.notion.enabled && settings.notion.accessToken && settings.notion.databaseId)) && (
         <hr aria-hidden='true' className='border-base-200 my-1' />
       )}
@@ -243,9 +266,22 @@ const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen })
           </ul>
         </MenuItem>
       )}
+      {pageboundEnabled && (
+        <MenuItem label={_('Pagebound Sync')} detailsOpen={false} buttonClass='py-2'>
+          <ul className='flex flex-col ps-1'>
+            <MenuItem label={_('Push Progress')} noIcon onClick={handlePushPageboundProgress} />
+            <MenuItem
+              label={_('Link Book')}
+              description={pageboundLink?.title}
+              noIcon
+              onClick={handleLinkPageboundBook}
+            />
+          </ul>
+        </MenuItem>
+      )}
       <hr aria-hidden='true' className='border-base-200 my-1' />
       <MenuItem label={_('Proofread')} onClick={showProofreadRulesWindow} />
-      {canPairAudiobook && (
+      {showPairAudiobook && (
         <MenuItem
           label={
             getConfig(sideBarBookKey!)?.audiobook ? _('Manage Audiobook') : _('Pair Audiobook')
@@ -266,6 +302,13 @@ const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen })
         Icon={isSortedTOC ? MdCheck : undefined}
         onClick={handleToggleSortTOC}
       />
+      {bookData?.bookDoc?.getPageThumbnail && (
+        <MenuItem
+          label={_('Show Page Thumbnails')}
+          Icon={showTOCThumbnails ? MdCheck : undefined}
+          onClick={handleToggleTOCThumbnails}
+        />
+      )}
       <MenuItem label={_('Reload Page')} shortcut='Shift+R' onClick={handleReloadPage} />
       <hr aria-hidden='true' className='border-base-200 my-1' />
       {isWebAppPlatform() && <MenuItem label={_('Download Readest')} onClick={downloadReadest} />}

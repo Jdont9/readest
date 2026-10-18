@@ -5,17 +5,61 @@ import type { Book } from '@/types/book';
 /** Scheme prefix for the synthetic filePath of an ABS streaming audiobook. */
 export const ABS_FILE_SCHEME = 'abs://';
 
-/** True when `book` is a streaming audiobook from an Audiobookshelf server (no local file). */
+/**
+ * True when `book` plays through the audiobook player rather than the reader:
+ * an Audiobookshelf stream, or audio streamed from an OPDS catalog (#6224).
+ * Neither has a local file.
+ */
 export const isAudiobook = (book: {
   format: Book['format'];
   metadata?: Book['metadata'];
-}): boolean => book.format === 'ABS' && book.metadata?.absMediaType !== 'ebook';
+}): boolean =>
+  book.format === 'OPDSAUDIO' ||
+  book.format === 'BOOKORBIT' ||
+  (book.format === 'ABS' && book.metadata?.absMediaType !== 'ebook');
 
 /** True when `book` is an ebook streamed from an Audiobookshelf server. */
 export const isAbsEbook = (book: {
   format: Book['format'];
   metadata?: Book['metadata'];
 }): boolean => book.format === 'ABS' && book.metadata?.absMediaType === 'ebook';
+
+/**
+ * True when a separate audiobook can be paired with the open book: a
+ * reflowable EPUB with a table of contents. Reads the format the document
+ * parsed as, since a book streamed from Audiobookshelf keeps `format: 'ABS'`
+ * whatever file sits behind it.
+ */
+export const canPairAudiobook = (
+  bookData:
+    | {
+        book?: Pick<Book, 'format'> | null;
+        docFormat?: Book['format'];
+        bookDoc?: { rendition?: { layout?: string }; toc?: unknown[] } | null;
+      }
+    | null
+    | undefined,
+): boolean =>
+  (bookData?.docFormat ?? bookData?.book?.format) === 'EPUB' &&
+  bookData?.bookDoc?.rendition?.layout !== 'pre-paginated' &&
+  !!bookData?.bookDoc?.toc?.length;
+
+/**
+ * True when an ABS book's media can be downloaded for offline use: audiobooks
+ * and ebooks, not podcast shows. Reads both copies of the media type: a
+ * metadata edit drops the mirror until the next library sync.
+ */
+export const isAbsOfflineCapable = (book: {
+  format: Book['format'];
+  absMediaType?: Book['absMediaType'];
+  metadata?: Book['metadata'];
+}): boolean =>
+  book.format === 'ABS' &&
+  book.absMediaType !== 'podcast' &&
+  book.metadata?.absMediaType !== 'podcast';
+
+/** Books-relative folder holding an ABS audiobook downloaded for offline use. */
+export const getAbsOfflineDir = (bookHash: string): string => `${bookHash}/abs-offline`;
 
 /** Builds the synthetic filePath for an ABS book: `abs://<serverId>/<itemId>`. */
 export const makeAbsFilePath = (serverId: string, itemId: string): string =>

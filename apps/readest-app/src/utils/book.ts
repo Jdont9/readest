@@ -1,9 +1,11 @@
-import { BookMetadata, CalibreCustomColumn, EXTS } from '@/libs/document';
+import { BookDoc, BookMetadata, CalibreCustomColumn, EXTS } from '@/libs/document';
 import {
   Book,
   BOOK_CONFIG_SCHEMA_VERSION,
   BookConfig,
+  BookFormat,
   BookProgress,
+  FIXED_LAYOUT_FORMATS,
   WritingMode,
 } from '@/types/book';
 import { SUPPORTED_LANGS } from '@/services/constants';
@@ -12,6 +14,21 @@ import { getStorageType } from './storage';
 import { getDirFromLanguage } from './rtl';
 import { code6392to6391, isValidLang, normalizedLangCode } from './lang';
 import { md5 } from './md5';
+
+// Mirrors the totals the reader stores in book.progress[1]: one page per
+// section for fixed layout, otherwise foliate's SectionProgress location count
+// (1500 bytes of linear section text a page).
+export const getBookDocPageCount = (bookDoc: BookDoc, format: BookFormat): number | undefined => {
+  const sections = bookDoc.sections ?? [];
+  if (bookDoc.rendition?.layout === 'pre-paginated' || FIXED_LAYOUT_FORMATS.has(format)) {
+    return sections.length || undefined;
+  }
+  const size = sections.reduce((sum, s) => sum + (s.linear !== 'no' && s.size > 0 ? s.size : 0), 0);
+  return Math.ceil(size / 1500) || undefined;
+};
+
+export const getBookPageCount = (book: Book): number | undefined =>
+  book.progress?.[1] || book.pageCount || undefined;
 
 export const getDir = (book: Book) => {
   return `${book.hash}`;
@@ -177,15 +194,19 @@ export const formatDescription = (description?: string | LanguageMap) => {
 };
 
 /**
- * The series position, or undefined when the book has none. Tolerates the two
- * shapes found in real libraries: readerStore/bookService default a missing
- * calibre:series_index to 0 (so 0 means "no position"), and indices edited
- * before the metadata form coerced numbers were persisted (and synced) as
- * strings like "2".
+ * The series position, or undefined when the book has none. 0 is a real
+ * position (a prequel numbered #0). Tolerates indices edited before the
+ * metadata form coerced numbers, persisted (and synced) as strings like "2".
  */
 export const getSeriesIndex = (seriesIndex?: number | string): number | undefined => {
   const index = typeof seriesIndex === 'string' ? parseFloat(seriesIndex) : seriesIndex;
-  return typeof index === 'number' && Number.isFinite(index) && index > 0 ? index : undefined;
+  return typeof index === 'number' && Number.isFinite(index) && index >= 0 ? index : undefined;
+};
+
+/** A parsed `belongsTo` series position; undefined (not 0) when the book has none. */
+export const parseSeriesPosition = (position?: string | number): number | undefined => {
+  const index = parseFloat(String(position ?? ''));
+  return Number.isFinite(index) ? index : undefined;
 };
 
 export const formatSeries = (series?: string, seriesIndex?: number) => {
@@ -299,6 +320,64 @@ export const pickFresherGroup = <T extends BookGroupFields>(
   };
 };
 
+/**
+ * Move a book into a group, or out of one when both are undefined. Only the
+ * group's own clock is stamped: `updatedAt` is the Date Read sort key and
+ * regrouping is not reading (#6414). A removal MUST be stamped too — an
+ * unstamped ungrouped row loses to a grouped peer by design (#5911).
+ */
+export const setBookGroup = (
+  book: Book,
+  groupId: string | undefined,
+  groupName: string | undefined,
+  now = Date.now(),
+) => {
+  book.groupId = groupId;
+  book.groupName = groupName;
+  book.groupUpdatedAt = now;
+};
+
+/**
+ * Stamp a delete so every device hides the book, erasing its reading progress
+ * when the caller asks for a purge.
+ *
+ * `updatedAt` is bumped on purpose here, unlike the group/metadata/cover clocks
+ * (#6414): the cloud merge is whole-row last-write-wins, and a delete used to
+ * leave `updatedAt` alone — so the row's own older page-turn progress outranked
+ * the tombstone, the next pull cleared `deletedAt`, and the book came back with
+ * its progress, as if the delete (and the purge) had done nothing (#6663). The
+ * demo-shelf comment in useBooksSync names the same mechanism.
+ */
+export const markBookDeleted = (book: Book, deletedAt: number, purge: boolean) => {
+  book.deletedAt = deletedAt;
+  // A library tombstone alone is not permission to destroy bytes on a
+  // third-party file mirror. Bind the explicit cloud-and-device intent to this
+  // exact tombstone so the file-sync engine can distinguish it from a
+  // local-only or indirectly-created delete (#5695, the third recurrence of
+  // #5084).
+  book.fileSyncDeletionRequestedAt = deletedAt;
+  book.downloadedAt = null;
+  book.coverDownloadedAt = null;
+  // Strictly above any future-dated stamp a fast-clocked peer left on the row:
+  // lowering it would hand the merge back to the cloud row (ties go to it).
+  book.updatedAt = Math.max(deletedAt, (book.updatedAt ?? 0) + 1);
+  // null (not undefined, which JSON drops) clears it in the cloud too (#6532).
+  if (purge) book.progress = null;
+};
+
+/**
+ * The latest local edit on any of a book row's clocks. Group, metadata and
+ * cover edits stamp only their own clock and leave `updatedAt` alone (#6414),
+ * so the sync push has to look at all of them to know the row changed.
+ */
+export const getBookChangedAt = (book: Book): number =>
+  Math.max(
+    book.updatedAt ?? 0,
+    book.groupUpdatedAt ?? 0,
+    book.metadataUpdatedAt ?? 0,
+    book.coverUpdatedAt ?? 0,
+  );
+
 /** True when `resolved` names a different group than `current` does. */
 export const bookGroupDiffers = (current: BookGroupFields, resolved: BookGroupFields): boolean =>
   (current.groupId ?? undefined) !== (resolved.groupId ?? undefined) ||
@@ -313,7 +392,6 @@ export const getBookWithUpdatedMetadata = (
   metadata: BookMetadata,
   tags?: string[],
 ): Book => {
-  const now = Date.now();
   const updatedBook: Book = {
     ...book,
     metadata,
@@ -321,10 +399,10 @@ export const getBookWithUpdatedMetadata = (
     title: formatTitle(metadata.title),
     author: formatAuthors(metadata.author),
     primaryLanguage: getPrimaryLanguage(metadata.language),
-    updatedAt: now,
     // The metadata group merges on its own clock so a page turn elsewhere
-    // (which dominates updatedAt) cannot clobber this edit (issue #5438).
-    metadataUpdatedAt: now,
+    // (which dominates updatedAt) cannot clobber this edit (issue #5438), and
+    // updatedAt stays put so the edit doesn't reorder Date Read (#6414).
+    metadataUpdatedAt: Date.now(),
   };
   const newCoverImageUrl = metadata.coverImageBlobUrl || metadata.coverImageUrl;
   if (newCoverImageUrl) {
@@ -412,7 +490,7 @@ export const getCurrentPage = (book: Book, progress: BookProgress) => {
  * manually-marked-unread books. A book actively being read has `readingStatus`
  * either `undefined` (cleared from 'unread' on first open) or `'reading'`, both
  * of which pass. Shared by the library's recently-read shelf and the
- * home-screen reading widget so the two surfaces stay in sync.
+ * home-screen bookshelf widget so the two surfaces stay in sync.
  */
 export const isCurrentlyReadingBook = (book: Book): boolean =>
   !book.deletedAt &&

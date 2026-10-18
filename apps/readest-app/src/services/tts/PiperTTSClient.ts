@@ -1,6 +1,5 @@
 import { AppService } from '@/types/system';
 import { BufferedTTSClient } from './BufferedTTSClient';
-import { BookTTSCacheStore, getTTSCacheConfig } from './providers/bookCacheStore';
 import { CachingProvider } from './providers/cache';
 import { PiperSpeechProvider } from './providers/piper';
 import { PiperVoiceManager } from './providers/piperVoiceManager';
@@ -17,18 +16,17 @@ export class PiperTTSClient extends BufferedTTSClient {
   #piperProvider: PiperSpeechProvider;
   #voiceManager: PiperVoiceManager;
 
-  constructor(controller?: TTSController, appService?: AppService | null) {
+  // `cacheStore` is the book's shared per-book cache (one cache.db for every
+  // engine, created by the controller); null/absent means no persistent cache.
+  constructor(
+    controller?: TTSController,
+    appService?: AppService | null,
+    cacheStore?: ConstructorParameters<typeof CachingProvider>[1] | null,
+  ) {
     const piperProvider = new PiperSpeechProvider();
-    let provider: SpeechProvider = piperProvider;
-    const cacheConfig = getTTSCacheConfig();
-    if (appService && cacheConfig.enabled) {
-      const store = new BookTTSCacheStore(
-        appService,
-        () => controller?.bookKey?.split('-')[0] || null,
-        cacheConfig.budgetMB * 1024 * 1024,
-      );
-      provider = new CachingProvider(piperProvider, store);
-    }
+    const provider: SpeechProvider = cacheStore
+      ? new CachingProvider(piperProvider, cacheStore)
+      : piperProvider;
     super(provider, controller, appService);
     this.#piperProvider = piperProvider;
     this.#voiceManager = new PiperVoiceManager(piperProvider);

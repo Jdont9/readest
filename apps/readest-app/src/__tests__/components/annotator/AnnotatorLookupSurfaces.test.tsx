@@ -29,10 +29,17 @@ const h = vi.hoisted(() => ({
     copyToNotebook: false,
     rtl: false,
     vertical: false,
+    enableAnnotationQuickActions: false,
+    annotationQuickAction: '' as string,
+    keepSelectionAfterLookup: false,
   },
   saveConfig: vi.fn(),
   updateBooknotes: vi.fn(),
+  deselect: vi.fn(),
+  restoreSelectionRange: vi.fn(() => true),
   isTextSelected: { current: true },
+  appService: {} as { isIOSApp?: boolean },
+  onNativeTouch: null as null | ((ev: { type: string; x: number; y: number }) => void),
   // Swapped per test: the fixed-layout branch of `onLoad` used to wire PDF-only
   // listeners, so a regression there is only visible with this on.
   book: { format: 'EPUB', isFixedLayout: false },
@@ -60,7 +67,7 @@ vi.mock('@/hooks/useShortcuts', () => ({
 }));
 
 vi.mock('@/context/EnvContext', () => ({
-  useEnv: () => ({ envConfig: {}, appService: {} }),
+  useEnv: () => ({ envConfig: {}, appService: h.appService }),
 }));
 
 vi.mock('@/hooks/useTranslation', () => ({
@@ -107,7 +114,7 @@ vi.mock('@/store/bookDataStore', () => {
 
 vi.mock('@/store/readerStore', () => {
   const state = {
-    getView: () => ({ deselect: vi.fn(), getCFI: () => 'epubcfi(/6/2!/4/2)' }),
+    getView: () => ({ deselect: h.deselect, getCFI: () => 'epubcfi(/6/2!/4/2)' }),
     getViewsById: () => [],
     getViewSettings: () => h.viewSettings,
   };
@@ -159,6 +166,7 @@ vi.mock('@/app/reader/hooks/useNotesSync', () => ({ useNotesSync: () => {} }));
 vi.mock('@/app/reader/hooks/useBookOrbitNotesSync', () => ({ useBookOrbitNotesSync: () => {} }));
 vi.mock('@/app/reader/hooks/useReadwiseSync', () => ({ useReadwiseSync: () => {} }));
 vi.mock('@/app/reader/hooks/useHardcoverSync', () => ({ useHardcoverSync: () => {} }));
+vi.mock('@/app/reader/hooks/usePageboundSync', () => ({ usePageboundSync: () => {} }));
 vi.mock('@/app/reader/hooks/useNotionSync', () => ({ useNotionSync: () => {} }));
 vi.mock('@/app/reader/hooks/useFoliateEvents', () => ({
   useFoliateEvents: (_view: unknown, handlers: Record<string, (event: Event) => void>) => {
@@ -166,7 +174,12 @@ vi.mock('@/app/reader/hooks/useFoliateEvents', () => ({
   },
 }));
 vi.mock('@/app/reader/hooks/useRendererInputListeners', () => ({
-  useRendererInputListeners: () => {},
+  useRendererInputListeners: (
+    _view: unknown,
+    opts: { onNativeTouch?: (ev: { type: string; x: number; y: number }) => void },
+  ) => {
+    h.onNativeTouch = opts.onNativeTouch ?? null;
+  },
 }));
 
 vi.mock('@/app/reader/hooks/useTextSelector', () => ({
@@ -198,6 +211,7 @@ vi.mock('@/app/reader/hooks/useTextSelector', () => ({
       // The real hook republishes the selection with the flag set; the test
       // drives that step itself so it can assert what the effect does with it.
       suppressNativeSelectionHandles: vi.fn(),
+      restoreSelectionRange: h.restoreSelectionRange,
       noteAutoTurnPoint: { current: null },
       cancelAutoTurn: vi.fn(),
       onAutoTurn: vi.fn(),
@@ -229,14 +243,28 @@ vi.mock('@/app/reader/components/annotator/ImportAnnotationsDialog', () => ({
 vi.mock('@/app/reader/components/annotator/AnnotationPopup', () => ({
   default: () => <div data-testid='annotation-toolbar' />,
 }));
+// The dismiss button stands in for the popup's close / backdrop tap, so a test
+// can drive the route back out of the lookup. Each surface reads its text the
+// way the real one does on every render, so rendering one without a word fails
+// the same way (#6419).
 vi.mock('@/app/reader/components/annotator/DictionaryPopup', () => ({
-  default: () => <div data-testid='dictionary-surface' />,
+  default: ({ word, onDismiss }: { word: string; onDismiss: () => void }) => (
+    <div data-testid='dictionary-surface' data-word={word.trim()}>
+      <button type='button' data-testid='dictionary-dismiss' onClick={onDismiss} />
+    </div>
+  ),
 }));
 vi.mock('@/app/reader/components/annotator/DictionarySheet', () => ({
-  default: () => <div data-testid='dictionary-surface' />,
+  default: ({ word, onDismiss }: { word: string; onDismiss: () => void }) => (
+    <div data-testid='dictionary-surface' data-word={word.trim()}>
+      <button type='button' data-testid='dictionary-dismiss' onClick={onDismiss} />
+    </div>
+  ),
 }));
 vi.mock('@/app/reader/components/annotator/TranslatorPopup', () => ({
-  default: () => <div data-testid='translator-surface' />,
+  default: ({ text }: { text: string }) => (
+    <div data-testid='translator-surface' data-text={text.trim()} />
+  ),
 }));
 vi.mock('@/app/reader/components/annotator/ProofreadPopup', () => ({
   default: () => <div data-testid='proofread-surface' />,
@@ -275,11 +303,16 @@ const republishSelectionWithSuppressedHandles = async () => {
 
 beforeEach(() => {
   h.actions = null;
+  h.appService = {};
+  h.onNativeTouch = null;
   h.book = { format: 'EPUB', isFixedLayout: false };
   h.foliateHandlers = null;
   h.config.booknotes = [];
   h.isTextSelected.current = true;
   h.setSelection = null;
+  h.viewSettings.enableAnnotationQuickActions = false;
+  h.viewSettings.annotationQuickAction = '';
+  h.restoreSelectionRange.mockReturnValue(true);
   h.updateBooknotes.mockImplementation(() => h.config);
   vi.clearAllMocks();
 });
@@ -304,6 +337,42 @@ describe('a lookup surface survives the selection it is anchored to being republ
 
     expect(screen.queryByTestId(testId)).toBeTruthy();
     expect(screen.queryByTestId('annotation-toolbar')).toBeNull();
+  });
+});
+
+/**
+ * #6419 — clicking outside the dictionary crashed the reader on Windows.
+ *
+ * The lookup surfaces are fed `selection.text`, but the selection can be
+ * cleared without going through the dismiss that closes them: with the instant
+ * highlight quick action armed, a tap on the page clears it from
+ * `useInstantAnnotation`. The surface then rendered once with no text and
+ * threw on `word.trim()`, taking the whole reader down to the error page.
+ */
+describe('a lookup surface closes when its selection is cleared', () => {
+  test.each([
+    ['onDictionarySelection', 'dictionary-surface'],
+    ['onTranslateSelection', 'translator-surface'],
+    ['onProofreadSelection', 'proofread-surface'],
+  ])('%s closes instead of rendering without text', async (action, testId) => {
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectText();
+
+    act(() => {
+      h.actions?.[action]?.();
+    });
+    expect(screen.getByTestId(testId)).toBeTruthy();
+
+    // What `clearInstantAnnotationState` does on a tap.
+    await act(async () => {
+      h.setSelection?.(() => null);
+    });
+    expect(screen.queryByTestId(testId)).toBeNull();
+
+    // And the next selection gets the toolbar, not the stale lookup.
+    await selectText();
+    expect(screen.queryByTestId(testId)).toBeNull();
+    expect(screen.getByTestId('annotation-toolbar')).toBeTruthy();
   });
 });
 
@@ -353,5 +422,355 @@ describe('a context menu never opens a lookup surface by itself', () => {
     });
 
     expect(screen.queryByTestId('translator-surface')).toBeNull();
+  });
+});
+
+/**
+ * #6213 — the instant dictionary quick action left nothing behind.
+ *
+ * #5730 made the instant lookup consume its selection so the platform's own
+ * selection UI (iOS draws grabbers and the blue highlight above web content)
+ * couldn't paint over the popup, and so the dismiss had no toolbar to return
+ * to (#5585). But that also took away the only route to highlighting or
+ * copying the word afterwards: with a quick action armed, re-selecting it just
+ * opens the dictionary again. The selection is now handed back when the lookup
+ * closes — programmatically, so the native handles stay away.
+ */
+describe('the instant dictionary hands the selection back when it closes', () => {
+  const selectWord = async () => {
+    if (!document.querySelector('#gridcell-book-1')) {
+      const gridCell = document.createElement('div');
+      gridCell.id = 'gridcell-book-1';
+      document.body.append(gridCell);
+    }
+    const paragraph = document.createElement('p');
+    paragraph.textContent = 'fortune';
+    document.body.append(paragraph);
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    await act(async () => {
+      h.setSelection?.(() => ({
+        key: 'book-1',
+        text: 'fortune',
+        cfi: 'epubcfi(/6/2!/4/2)',
+        range,
+        index: 0,
+        page: 1,
+      }));
+    });
+    return range;
+  };
+
+  beforeEach(() => {
+    h.viewSettings.enableAnnotationQuickActions = true;
+    h.viewSettings.annotationQuickAction = 'dictionary';
+    h.viewSettings.keepSelectionAfterLookup = true;
+  });
+
+  test('drops the selection while the lookup is open', async () => {
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectWord();
+
+    expect(screen.getByTestId('dictionary-surface')).toBeTruthy();
+    expect(screen.queryByTestId('annotation-toolbar')).toBeNull();
+    expect(h.deselect).toHaveBeenCalled();
+    expect(h.isTextSelected.current).toBe(false);
+  });
+
+  test('restores the selection and returns the toolbar on dismiss', async () => {
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    const range = await selectWord();
+
+    await act(async () => {
+      screen.getByTestId('dictionary-dismiss').click();
+    });
+
+    expect(h.restoreSelectionRange).toHaveBeenCalledWith(range);
+    expect(screen.queryByTestId('dictionary-surface')).toBeNull();
+    expect(screen.getByTestId('annotation-toolbar')).toBeTruthy();
+  });
+
+  // Xiaomi 13: highlighting the handed-back word re-opened the dictionary.
+  // `handleHighlight` republishes the selection to stamp `annotated`, and with
+  // the selection live again the effect read that as a fresh selection and ran
+  // the quick action a second time — the tap on the colour swatch having
+  // re-armed the once-per-gesture latch that would otherwise have swallowed it.
+  // The restored selection carries `quickActionHandled` so a republish of it can
+  // never fire the lookup again.
+  test('a republish of the handed-back selection does not re-open the lookup', async () => {
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    // The section load is what registers the pointerdown listener that re-arms
+    // the quick action for each new gesture.
+    await act(async () => {
+      h.foliateHandlers?.['onLoad']?.(
+        new CustomEvent('load', { detail: { doc: document, index: 0 } }) as Event,
+      );
+    });
+    await selectWord();
+
+    await act(async () => {
+      screen.getByTestId('dictionary-dismiss').click();
+    });
+    expect(screen.getByTestId('annotation-toolbar')).toBeTruthy();
+
+    // The tap on the toolbar's highlight swatch: a new gesture (Android bridges
+    // every touch on the window, not just those over the page), then the
+    // republish handleHighlight does once the highlight is created.
+    await act(async () => {
+      const pointerDown = new Event('pointerdown', { bubbles: true });
+      Object.defineProperty(pointerDown, 'pointerType', { value: 'mouse' });
+      document.dispatchEvent(pointerDown);
+      h.setSelection?.((prev) => (prev ? { ...prev, annotated: true } : prev));
+    });
+
+    expect(screen.queryByTestId('dictionary-surface')).toBeNull();
+    expect(screen.getByTestId('annotation-toolbar')).toBeTruthy();
+  });
+
+  test('a restore that cannot be applied dismisses clean', async () => {
+    h.restoreSelectionRange.mockReturnValue(false);
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectWord();
+
+    await act(async () => {
+      screen.getByTestId('dictionary-dismiss').click();
+    });
+
+    expect(screen.queryByTestId('dictionary-surface')).toBeNull();
+    expect(screen.queryByTestId('annotation-toolbar')).toBeNull();
+  });
+});
+
+/**
+ * #6454 — handing the selection back (#6213) raised the toolbar after every
+ * instant lookup, an extra dismiss for readers who look up word after word.
+ * It is now opt-in: by default closing the lookup goes straight back to reading.
+ */
+describe('the instant dictionary dismisses clean unless told to keep the selection', () => {
+  beforeEach(() => {
+    h.viewSettings.enableAnnotationQuickActions = true;
+    h.viewSettings.annotationQuickAction = 'dictionary';
+    h.viewSettings.keepSelectionAfterLookup = false;
+  });
+
+  test('closing the lookup restores nothing and shows no toolbar', async () => {
+    if (!document.querySelector('#gridcell-book-1')) {
+      const gridCell = document.createElement('div');
+      gridCell.id = 'gridcell-book-1';
+      document.body.append(gridCell);
+    }
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    const paragraph = document.createElement('p');
+    paragraph.textContent = 'fortune';
+    document.body.append(paragraph);
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    await act(async () => {
+      h.setSelection?.(() => ({
+        key: 'book-1',
+        text: 'fortune',
+        cfi: 'epubcfi(/6/2!/4/2)',
+        range,
+        index: 0,
+        page: 1,
+      }));
+    });
+    expect(screen.getByTestId('dictionary-surface')).toBeTruthy();
+
+    await act(async () => {
+      screen.getByTestId('dictionary-dismiss').click();
+    });
+
+    expect(h.restoreSelectionRange).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('dictionary-surface')).toBeNull();
+    expect(screen.queryByTestId('annotation-toolbar')).toBeNull();
+  });
+});
+
+// #6804: a selection made in the footnote popup reaches the Annotator through
+// `footnote-selection`, not the section listeners that latch isTextSelected, so
+// the quick action never ran there and only the toolbar opened.
+describe('quick actions run on a selection made in the footnote popup', () => {
+  const selectInPopup = async (detail: Record<string, unknown> = {}, word = 'fortune') => {
+    if (!document.querySelector('#gridcell-book-1')) {
+      const gridCell = document.createElement('div');
+      gridCell.id = 'gridcell-book-1';
+      document.body.append(gridCell);
+    }
+    const paragraph = document.createElement('p');
+    paragraph.textContent = word;
+    document.body.append(paragraph);
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    await act(async () => {
+      await eventDispatcher.dispatch('footnote-selection', {
+        key: 'book-1',
+        range,
+        index: 3,
+        cfi: 'epubcfi(/6/2!/4/2)',
+        ...detail,
+      });
+    });
+  };
+
+  beforeEach(() => {
+    // Nothing is selected in the book's own sections.
+    h.isTextSelected.current = false;
+    h.viewSettings.enableAnnotationQuickActions = true;
+    h.viewSettings.annotationQuickAction = 'dictionary';
+  });
+
+  test('a settled popup selection runs the quick action', async () => {
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectInPopup({ quickAction: true });
+
+    expect(screen.getByTestId('dictionary-surface').dataset['word']).toBe('fortune');
+    expect(screen.queryByTestId('annotation-toolbar')).toBeNull();
+  });
+
+  // The system selection handles are drawn above the lookup, so the instant
+  // dictionary drops the popup selection; the cleared report it echoes back
+  // must not close the lookup.
+  test('the instant dictionary drops the popup selection and stays open', async () => {
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectInPopup({ quickAction: true });
+    expect(document.getSelection()?.rangeCount).toBe(0);
+
+    await act(async () => {
+      await eventDispatcher.dispatch('footnote-selection', { key: 'book-1' });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+
+    expect(screen.getByTestId('dictionary-surface').dataset['word']).toBe('fortune');
+  });
+
+  // The quick action runs once per gesture; a press in the popup must re-arm
+  // it, or only the first popup selection ran it (iOS).
+  test('a new gesture in the popup runs the quick action again', async () => {
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectInPopup({ quickAction: true });
+    await act(async () => {
+      screen.getByTestId('dictionary-dismiss').click();
+    });
+    expect(screen.queryByTestId('dictionary-surface')).toBeNull();
+
+    await act(async () => {
+      await eventDispatcher.dispatch('footnote-pointerdown', {
+        key: 'book-1',
+        pointerType: 'mouse',
+      });
+    });
+    await selectInPopup({ quickAction: true });
+
+    expect(screen.getByTestId('dictionary-surface')).toBeTruthy();
+  });
+
+  // iOS settles a popup selection with the finger still down and re-confirms
+  // it, handles and all, on release: the lookup must wait for the release.
+  test('on iOS the quick action waits for the finger to lift', async () => {
+    h.appService = { isIOSApp: true };
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    act(() => h.onNativeTouch?.({ type: 'touchstart', x: 0, y: 0 }));
+    await selectInPopup({ quickAction: true });
+    expect(screen.queryByTestId('dictionary-surface')).toBeNull();
+
+    await act(async () => h.onNativeTouch?.({ type: 'touchend', x: 0, y: 0 }));
+
+    expect(screen.getByTestId('dictionary-surface').dataset['word']).toBe('fortune');
+    expect(document.getSelection()?.rangeCount).toBe(0);
+  });
+
+  test('a popup selection re-confirmed under the lookup is dropped again', async () => {
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectInPopup({ quickAction: true });
+    expect(document.getSelection()?.rangeCount).toBe(0);
+
+    await selectInPopup({ quickAction: true });
+
+    expect(document.getSelection()?.rangeCount).toBe(0);
+    expect(screen.getByTestId('dictionary-surface').dataset['word']).toBe('fortune');
+  });
+
+  // On desktop the lookup leaves the rest of the popup clickable: a new press
+  // there is the reader's next gesture, not iOS re-confirming the dropped
+  // selection, so it looks up the next word or closes the lookup (#6869).
+  const pressInPopup = async () => {
+    await act(async () => {
+      await eventDispatcher.dispatch('footnote-pointerdown', {
+        key: 'book-1',
+        pointerType: 'mouse',
+      });
+    });
+  };
+
+  test('a word selected in the popup under the lookup is looked up', async () => {
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectInPopup({ quickAction: true });
+    expect(screen.getByTestId('dictionary-surface').dataset['word']).toBe('fortune');
+
+    await pressInPopup();
+    await selectInPopup({ quickAction: true }, 'lanterns');
+
+    expect(screen.getByTestId('dictionary-surface').dataset['word']).toBe('lanterns');
+  });
+
+  test('a click on empty space in the popup closes the lookup', async () => {
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectInPopup({ quickAction: true });
+    expect(screen.getByTestId('dictionary-surface')).toBeTruthy();
+
+    await pressInPopup();
+    await act(async () => {
+      await eventDispatcher.dispatch('footnote-selection', { key: 'book-1' });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+
+    expect(screen.queryByTestId('dictionary-surface')).toBeNull();
+  });
+
+  test('a report taken mid-drag still opens the toolbar', async () => {
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectInPopup();
+
+    expect(screen.queryByTestId('dictionary-surface')).toBeNull();
+    expect(screen.getByTestId('annotation-toolbar')).toBeTruthy();
+  });
+
+  // The popup document has no instant annotating, so the highlight quick
+  // action highlights the settled selection itself.
+  test('the highlight quick action highlights the popup selection', async () => {
+    h.viewSettings.annotationQuickAction = 'highlight';
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectInPopup({ quickAction: true });
+
+    expect(h.updateBooknotes).toHaveBeenCalled();
+    const booknotes = h.updateBooknotes.mock.calls.at(-1)![1] as {
+      cfi: string;
+      style?: string;
+    }[];
+    expect(booknotes).toContainEqual(
+      expect.objectContaining({ cfi: 'epubcfi(/6/2!/4/2)', style: 'highlight' }),
+    );
+    expect(screen.queryByTestId('annotation-toolbar')).toBeNull();
+  });
+
+  test('a highlight quick action mid-drag still opens the toolbar', async () => {
+    h.viewSettings.annotationQuickAction = 'highlight';
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectInPopup();
+
+    expect(h.updateBooknotes).not.toHaveBeenCalled();
+    expect(screen.getByTestId('annotation-toolbar')).toBeTruthy();
+  });
+
+  // Read-aloud is disabled for popup selections, so it keeps the toolbar.
+  test('the tts quick action keeps the toolbar', async () => {
+    h.viewSettings.annotationQuickAction = 'tts';
+    render(<Annotator bookKey='book-1' contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }} />);
+    await selectInPopup({ quickAction: true });
+
+    expect(screen.getByTestId('annotation-toolbar')).toBeTruthy();
   });
 });
