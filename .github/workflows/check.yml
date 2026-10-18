@@ -1,0 +1,47 @@
+name: Check (types + tests)
+
+# Quick safety net for merges: type-check, lint and unit tests, without building
+# an APK. Runs on every push and can be started by hand from the Actions tab
+# (GitHub app: Actions > Check > Run workflow).
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: copy vendored assets
+        run: pnpm --filter @readest/readest-app setup-vendors
+
+      # tsc --noEmit && biome lint
+      - name: type-check and lint
+        run: pnpm lint
+
+      - name: unit tests
+        run: pnpm --filter @readest/readest-app test:pr:web:unit
