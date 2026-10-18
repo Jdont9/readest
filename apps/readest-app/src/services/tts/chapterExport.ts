@@ -235,7 +235,7 @@ const isRiff = (bytes: Uint8Array): boolean =>
 
 export type ChapterExportResult =
   | { ok: true; name: string }
-  | { ok: false; reason: 'no-folder' | 'not-packed' | 'wav-audio' };
+  | { ok: false; reason: 'no-folder' | 'not-packed' | 'wav-audio' | 'no-audio' };
 
 // Never throws for expected situations: the reason says why nothing was
 // written so the caller can tell the user instead of failing silently.
@@ -252,6 +252,8 @@ export const exportChapterAudio = async (
   for (let section = chapter.startSection; section < chapter.endSection; section++) {
     const pack = await reader.readSectionPack(section);
     if (!pack) return { ok: false, reason: 'not-packed' };
+    // Packed but empty: a section with no text (blank page, image). Skip it.
+    if (pack.byteLength === 0) continue;
     const bytes = new Uint8Array(pack);
     if (isRiff(bytes)) {
       // Audio cached before the server switched to MP3: concatenated WAVs are
@@ -261,7 +263,8 @@ export const exportChapterAudio = async (
     }
     parts.push(bytes);
   }
-  if (!parts.length) return { ok: false, reason: 'not-packed' };
+  // Every section of this "chapter" was empty (e.g. a trailing blank page).
+  if (!parts.length) return { ok: false, reason: 'no-audio' };
 
   const tag = buildId3Tag({
     title: chapter.label,

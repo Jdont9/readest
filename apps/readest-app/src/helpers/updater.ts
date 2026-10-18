@@ -218,6 +218,8 @@ export const getLastShownReleaseNotesVersion = () => {
 };
 
 export const checkAppReleaseNotes = async (isAutoCheck = true) => {
+  // Fork builds: the official release notes describe the official app, not this fork.
+  if (isAutoCheck && process.env['NEXT_PUBLIC_DISABLE_UPDATER']) return false;
   const currentVersion = getAppVersion();
   const lastShownVersion = getLastShownReleaseNotesVersion();
   if ((lastShownVersion && semver.gt(currentVersion, lastShownVersion)) || !isAutoCheck) {

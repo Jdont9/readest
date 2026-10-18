@@ -931,14 +931,19 @@ export class SqliteTTSCacheStore implements TTSCacheStore {
   // reading order), or null when the section is not fully packed.
   async readSectionPack(section: number): Promise<ArrayBuffer | null> {
     await this.#ensureSchema();
-    const rows = await this.#db.select<DatabaseRow & { path: string }>(
-      `SELECT p.path FROM packs p
+    const rows = await this.#db.select<DatabaseRow & { path: string; size: number }>(
+      `SELECT p.path, p.size FROM packs p
          JOIN manifests m ON m.section = p.section AND ${CURRENT_PACK_PREDICATE}
         WHERE p.section = ? ORDER BY p.created_at DESC LIMIT 1`,
       [section],
     );
-    const path = rows[0]?.path;
-    return path ? this.readPackBytes(path) : null;
+    const row = rows[0];
+    if (!row) return null;
+    // A section without text (blank page, image) packs as a zero-byte pack:
+    // it IS packed, there is just nothing to play. readPackBytes() reports
+    // size 0 as null, so answer an empty buffer here to tell the two apart.
+    if (!row.size) return new ArrayBuffer(0);
+    return this.readPackBytes(row.path);
   }
 
   async readPackBytes(name: string): Promise<ArrayBuffer | null> {

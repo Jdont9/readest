@@ -324,7 +324,8 @@ export class TTSDownloadManager {
       } else if (result.reason === 'not-packed') {
         toast('error', "Export ignoré : l'audio du chapitre n'est pas encore assemblé dans le cache.");
       }
-      // 'no-folder': export not configured, stay quiet.
+      // 'no-folder' (export not configured) and 'no-audio' (a chapter made only of
+      // blank/image sections): nothing to report, stay quiet.
     } catch (err) {
       console.warn('[TTS] chapter export failed', item.id, err);
       toast('error', `Échec de l'export : ${err instanceof Error ? err.message : String(err)}`);

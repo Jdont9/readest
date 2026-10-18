@@ -14,7 +14,7 @@ export const DEFAULT_QWEN_TTS_BASE_URL = 'http://127.0.0.1:8000';
 
 export const QWEN_TTS_CONCURRENCY_KEY = 'qwenTTSDownloadConcurrency';
 const DEFAULT_QWEN_DOWNLOAD_CONCURRENCY = 6;
-const MAX_QWEN_DOWNLOAD_CONCURRENCY = 10;
+const MAX_QWEN_DOWNLOAD_CONCURRENCY = 24;
 // Batch size the server advertised on /health (null until probed).
 let serverMaxBatch: number | null = null;
 

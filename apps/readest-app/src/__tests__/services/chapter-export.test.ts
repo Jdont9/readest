@@ -73,6 +73,27 @@ describe('exportChapterAudio', () => {
     expect(Array.from(written.slice(-4))).toEqual([2, 2, 3, 3]);
   });
 
+  test('ignores empty (zero-byte) sections, e.g. trailing blank pages', async () => {
+    setTTSExportDir('/sdcard/Audio');
+    const reader = {
+      readSectionPack: async (s: number) =>
+        s === 3 ? new ArrayBuffer(0) : (new Uint8Array([s, s]).buffer as ArrayBuffer),
+    };
+    const result = await exportChapterAudio(appService, reader, chapter, { title: 'B' });
+    expect(result).toEqual({ ok: true, name: 'B/02 - T.mp3' });
+    expect(Array.from(files.get('/sdcard/Audio/B/02 - T.mp3')!.slice(-2))).toEqual([2, 2]);
+  });
+
+  test('reports no-audio when every section of the chapter is empty', async () => {
+    setTTSExportDir('/sdcard/Audio');
+    const empty = { readSectionPack: async () => new ArrayBuffer(0) };
+    expect(await exportChapterAudio(appService, empty, chapter)).toEqual({
+      ok: false,
+      reason: 'no-audio',
+    });
+    expect(files.size).toBe(0);
+  });
+
   test('skips when a section is not packed or the audio is WAV', async () => {
     setTTSExportDir('/sdcard/Audio');
     const missing = { readSectionPack: async (s: number) => (s === 3 ? null : new ArrayBuffer(2)) };

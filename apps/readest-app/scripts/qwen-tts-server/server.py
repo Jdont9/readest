@@ -44,7 +44,8 @@ DTYPE = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_suppo
 # Concurrent requests (Readest downloads send several sentences at once) are
 # grouped into ONE model call: autoregressive decoding is memory-bound, so a
 # batch of N sentences costs little more than a single one. Tune the size to
-# the GPU (T4: 4-6, L4/A100: 8-10).
+# the GPU (T4: up to ~10-16, L4/A100: 16-24). Past the GPU's limit a batch fails
+# and is split in halves automatically.
 MAX_BATCH = max(1, int(os.environ.get("QWEN_TTS_MAX_BATCH", "6")))
 # How long the worker waits for more requests before running a partial batch.
 BATCH_WAIT_S = max(0.0, float(os.environ.get("QWEN_TTS_BATCH_WAIT_MS", "120"))) / 1000
@@ -170,10 +171,16 @@ def _run_batch(batch: list[_Job]) -> None:
                 job.done.set()
             return
         except Exception as exc:  # noqa: BLE001 - fall back to one-by-one below
-            print(f"[batch] {len(batch)} requests failed as a batch ({exc!r}); retrying one by one",
-                  flush=True)
+            # Most likely out of GPU memory: free it and retry in two halves
+            # (recursively), so a too-large batch costs a retry, not N singles.
+            print(f"[batch] {len(batch)} requests failed as a batch ({exc!r}); "
+                  f"splitting into {len(batch) // 2} + {len(batch) - len(batch) // 2}", flush=True)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            middle = len(batch) // 2
+            _run_batch(batch[:middle])
+            _run_batch(batch[middle:])
+            return
     for job in batch:
         try:
             with torch.inference_mode():
