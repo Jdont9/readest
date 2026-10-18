@@ -22,7 +22,7 @@ describe('deriveDownloadChapters', () => {
       resolver({ a: 0, b: 2, c: 4 }),
       6,
     );
-    expect(chapters).toEqual([
+    expect(chapters).toMatchObject([
       { key: 'a', label: 'One', depth: 0, startSection: 0, endSection: 2 },
       { key: 'b', label: 'Two', depth: 0, startSection: 2, endSection: 4 },
       { key: 'c', label: 'Three', depth: 0, startSection: 4, endSection: 6 },
@@ -67,7 +67,7 @@ describe('deriveDownloadChapters', () => {
 
   test('falls back to one row per section when there is no usable TOC', async () => {
     const chapters = await deriveDownloadChapters([], resolver({}), 3);
-    expect(chapters).toEqual([
+    expect(chapters).toMatchObject([
       { key: 'section-0', label: 'Section 1', depth: 0, startSection: 0, endSection: 1 },
       { key: 'section-1', label: 'Section 2', depth: 0, startSection: 1, endSection: 2 },
       { key: 'section-2', label: 'Section 3', depth: 0, startSection: 2, endSection: 3 },

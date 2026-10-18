@@ -117,8 +117,10 @@ describe('ID3 tag and book folder', () => {
     expect(tag[3]).toBe(3);
     const size = (tag[6]! << 21) | (tag[7]! << 14) | (tag[8]! << 7) | tag[9]!;
     expect(size).toBe(tag.length - 10);
-    const text = new TextDecoder('utf-16le').decode(tag);
-    expect(text).toContain('7/53');
+    // "7/53" as UTF-16LE, as stored in the TRCK frame (frame headers are not
+    // 2-byte aligned, so search the bytes rather than decoding the whole tag).
+    const utf16 = (text: string) => Array.from(text).flatMap((c) => [c.charCodeAt(0), 0]);
+    expect(Array.from(tag).join(',')).toContain(utf16('7/53').join(','));
   });
 
   test('names the book folder safely', () => {

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useBookDataStore } from '@/store/bookDataStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TTSController } from '@/services/tts/TTSController';
-import { PiperTTSClient } from '@/services/tts/PiperTTSClient';
 import {
   chapterDownloadStatus,
   deriveDownloadChapters,

@@ -18,13 +18,16 @@ import {
 } from './types';
 import { createTTSNodeFilter } from './nodeFilter';
 import { expandRangeOverRuby } from '@/utils/ruby';
+// EdgeTTSClient first: services/constants.ts (reached through BufferedTTSClient ->
+// environment) imports it, and it extends BufferedTTSClient. Loading a Buffered
+// subclass such as Piper or Qwen before it makes that cycle evaluate in the wrong order.
+import { EdgeTTSClient } from './EdgeTTSClient';
 import { WebSpeechClient } from './WebSpeechClient';
 import { NativeTTSClient } from './NativeTTSClient';
+import { BufferedTTSClient } from './BufferedTTSClient';
 import { PiperTTSClient } from './PiperTTSClient';
 import { QwenTTSClient } from './QwenTTSClient';
 import { getQwenDownloadConcurrency } from './providers/qwen';
-import { EdgeTTSClient } from './EdgeTTSClient';
-import { BufferedTTSClient } from './BufferedTTSClient';
 import { createBookTTSCacheStore } from './providers/bookCacheStore';
 import { CachingProvider } from './providers/cache';
 import { ReadestVoiceProvider } from './providers/readest';
@@ -319,10 +322,6 @@ export class TTSController extends EventTarget {
       () => this.bookKey?.split('-')[0] || null,
     );
     this.ttsEdgeClient = new EdgeTTSClient(this, appService, cacheStore);
-    // Qwen is an optional remote neural voice service. It is constructed on
-    // every platform and only appears in the picker when its server responds.
-    // It shares the book's cache.db with every other engine.
-    this.ttsQwenClient = new QwenTTSClient(this, appService, cacheStore);
     this.#readestProvider = new ReadestVoiceProvider(this);
     this.ttsReadestClient = new BufferedTTSClient(
       cacheStore ? new CachingProvider(this.#readestProvider, cacheStore) : this.#readestProvider,
@@ -338,6 +337,10 @@ export class TTSController extends EventTarget {
       this,
       appService,
     );
+    // Qwen is an optional remote neural voice service. It is constructed on
+    // every platform and only appears in the picker when its server responds.
+    // It shares the book's cache.db with every other engine.
+    this.ttsQwenClient = new QwenTTSClient(this, appService, cacheStore);
     // Native TTS is backed by Android TextToSpeech and iOS AVSpeechSynthesizer.
     // TODO: implement native TTS client for desktop platforms.
     if (appService?.isAndroidApp || appService?.isIOSApp) {
@@ -2322,9 +2325,15 @@ export class TTSController extends EventTarget {
     const ttsWebVoices = await this.ttsWebClient.getVoices(lang);
     const ttsEdgeVoices = await this.ttsEdgeClient.getVoices(lang);
     const ttsNativeVoices = (await this.ttsNativeClient?.getVoices(lang)) ?? [];
-    const ttsPiperVoices = (await this.ttsPiperClient?.getVoices(lang)) ?? [];
-    const ttsQwenVoices = await this.ttsQwenClient.getVoices(lang);
-    this.ttsQwenVoices = await this.ttsQwenClient.getAllVoices();
+    const ttsPiperVoices = this.ttsPiperClient?.initialized
+      ? await this.ttsPiperClient.getVoices(lang)
+      : [];
+    const ttsQwenVoices = this.ttsQwenClient.initialized
+      ? await this.ttsQwenClient.getVoices(lang)
+      : [];
+    if (this.ttsQwenClient.initialized) {
+      this.ttsQwenVoices = await this.ttsQwenClient.getAllVoices();
+    }
     // Listed for every reader, the voices their plan lacks greyed out; hidden
     // only when there is no catalog (kill switch, offline).
     const ttsReadestVoices =
