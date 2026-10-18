@@ -60,7 +60,7 @@ export const useTTSDownloads = (
   // Whether the active engine synthesizes entirely on-device (Piper) rather
   // than calling out to a paid cloud voice (Edge) — used to decide whether
   // the premium paywall on pre-downloading even applies, see TTSPlayerSheet.
-  const isLocalEngine = controller?.ttsClient instanceof PiperTTSClient;
+  const isLocalEngine = !!controller?.ttsPiperClient && controller.ttsClient === controller.ttsPiperClient;
 
   const allItems = useTTSDownloadStore((state) => state.items);
   const items = useMemo(
